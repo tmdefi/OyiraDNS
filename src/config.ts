@@ -215,7 +215,7 @@ export function loadConfig(): ServiceConfig {
       defaultCurrency: readEnv("QUOTE_DEFAULT_CURRENCY", "USD"),
       paymentSymbol: readEnv("QUOTE_PAYMENT_SYMBOL", readEnv("OKX_PAYMENT_SYMBOL", "USDC")),
       serviceFeeAmount: readEnv("QUOTE_SERVICE_FEE_AMOUNT", readEnv("SERVICE_FEE_AMOUNT", "0")),
-      defaultTlds: parseCsv(readEnv("DOMAIN_SEARCH_DEFAULT_TLDS", "com,xyz,net,org,io,co,app,dev"))
+      defaultTlds: parseCsv(readEnv("DOMAIN_SEARCH_DEFAULT_TLDS", "com,xyz,net,org,io,co"))
     }
   };
 }

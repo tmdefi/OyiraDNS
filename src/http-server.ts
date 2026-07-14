@@ -52,6 +52,20 @@ const server = http.createServer(async (request, response) => {
 
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/status")) {
+      sendJson(response, 200, {
+        ok: true,
+        service: "oyira-http",
+        agent: "oyira",
+        endpoints: {
+          health: "/health",
+          readiness: "/ready",
+          manifest: "/agent/manifest"
+        }
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, {
         ok: true,

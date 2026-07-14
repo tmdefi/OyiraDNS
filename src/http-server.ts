@@ -1,5 +1,9 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { OKXFacilitatorClient } from "@okxweb3/x402-core";
+import { x402HTTPResourceServer, type HTTPAdapter, type HTTPRequestContext } from "@okxweb3/x402-core/http";
+import { x402ResourceServer } from "@okxweb3/x402-core/server";
+import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AuditLog } from "./audit-log.js";
 import { loadConfig } from "./config.js";
 import { DynadotClient, type RegistrationContact } from "./dynadot.js";
@@ -11,6 +15,7 @@ import { OkxPaymentClient } from "./okx.js";
 import { OyiraService, type OyiraMessageInput } from "./oyira-service.js";
 import { OyiraSessionStore } from "./oyira-sessions.js";
 import { UserApiKeyStore } from "./user-api-keys.js";
+import { hashX402PurchaseRequest, X402PurchaseStore } from "./x402-purchases.js";
 
 const config = loadConfig();
 const dynadot = new DynadotClient(config.dynadot);
@@ -22,7 +27,9 @@ const gemini = new GeminiClient(config.gemini);
 const sessions = new OyiraSessionStore(config.sessions);
 const auditLog = new AuditLog(config.audit);
 const userApiKeys = new UserApiKeyStore(config.auth);
+const x402Purchases = new X402PurchaseStore(config.x402);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
+let x402PurchaseServer: Promise<x402HTTPResourceServer> | null = null;
 
 interface AuthPrincipal {
   role: "owner" | "customer";
@@ -131,6 +138,143 @@ const server = http.createServer(async (request, response) => {
       const body = withPrincipal(await readJsonBody<OyiraMessageInput>(request), principal);
       const result = await oyira.handleMessage(body);
       sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/x402/domain/purchase") {
+      assertX402Configured();
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const context = x402RequestContext(request, url, body);
+      const resourceServer = await getX402PurchaseServer();
+      const paymentResult = await resourceServer.processHTTPRequest(context);
+
+      await auditLog.append({
+        action: "x402-domain-purchase",
+        status: "attempt",
+        request: auditRequest(body, {
+          role: "customer",
+          customerId: readOptionalString(body, "customerId"),
+          keyId: readOptionalString(body, "idempotencyKey")
+        })
+      });
+
+      if (paymentResult.type === "payment-error") {
+        sendInstructions(response, paymentResult.response);
+        return;
+      }
+
+      if (paymentResult.type !== "payment-verified") {
+        throw new HttpError(500, "x402 purchase route did not require payment.");
+      }
+
+      const prepared = await prepareX402Purchase(body);
+
+      if (prepared.record.status === "registered") {
+        sendJson(response, 200, {
+          agent: "oyira",
+          action: "x402-domain-purchase",
+          status: "already_registered",
+          domainName: prepared.record.domainName,
+          years: prepared.record.years,
+          quoteId: prepared.record.quoteId,
+          ledgerRecordId: prepared.record.ledgerRecordId
+        });
+        return;
+      }
+
+      const settlement = await resourceServer.processSettlement(
+        paymentResult.paymentPayload,
+        paymentResult.paymentRequirements,
+        paymentResult.declaredExtensions,
+        {
+          request: context,
+          responseBody: Buffer.from("{}"),
+          responseHeaders: {}
+        }
+      );
+
+      if (!settlement.success) {
+        await x402Purchases.update(prepared.record.idempotencyKey, {
+          status: "failed",
+          error: settlement.errorMessage ?? settlement.errorReason
+        });
+        sendInstructions(response, settlement.response);
+        return;
+      }
+
+      await x402Purchases.update(prepared.record.idempotencyKey, {
+        status: "payment_settled",
+        paymentTransaction: settlement.transaction
+      });
+
+      const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
+      const registrationContact = readRequiredRegistrationContact(body);
+      const registration = await dynadot.registerDomain({
+        domainName: quote.domainName,
+        years: quote.years,
+        currency: quote.currency,
+        nameservers: readStringArray(body, "nameservers"),
+        registrationContact,
+        paymentConfirmationId: settlement.transaction ?? prepared.record.idempotencyKey
+      });
+      const ledgerRecord = await domainLedger.createRecord({
+        domainName: quote.domainName,
+        customerId: readOptionalString(body, "customerId"),
+        years: quote.years,
+        currency: quote.currency,
+        paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
+        registrationContact,
+        dynadotRegistration: registration,
+        payment: {
+          provider: "x402",
+          network: settlement.requirements.network,
+          transaction: settlement.transaction,
+          amount: settlement.requirements.amount,
+          asset: settlement.requirements.asset
+        }
+      });
+
+      await x402Purchases.update(prepared.record.idempotencyKey, {
+        status: "registered",
+        ledgerRecordId: ledgerRecord.id
+      });
+      await auditLog.append({
+        action: "x402-domain-purchase",
+        status: "success",
+        request: auditRequest(body, {
+          role: "customer",
+          customerId: readOptionalString(body, "customerId"),
+          keyId: readOptionalString(body, "idempotencyKey")
+        }),
+        result: {
+          domainName: quote.domainName,
+          quoteId: quote.id,
+          ledgerRecordId: ledgerRecord.id,
+          paymentId: settlement.transaction
+        }
+      });
+
+      sendJson(
+        response,
+        200,
+        {
+          agent: "oyira",
+          action: "x402-domain-purchase",
+          status: "registered",
+          reply: `${quote.domainName} has been registered after x402 payment settlement.`,
+          quoteId: quote.id,
+          domainName: quote.domainName,
+          years: quote.years,
+          payment: {
+            provider: "x402",
+            network: settlement.requirements.network,
+            transaction: settlement.transaction
+          },
+          registration,
+          ledgerRecord
+        },
+        settlement.headers
+      );
       return;
     }
 
@@ -343,6 +487,7 @@ function manifest() {
       signup: "/auth/signup",
       adminApiKeys: "/admin/api-keys",
       message: "/agent/message",
+      x402Purchase: "/x402/domain/purchase",
       actions: {
         createPayment: "/agent/actions/create-payment",
         verifyPayment: "/agent/actions/verify-payment",
@@ -391,6 +536,8 @@ function manifest() {
     safety: [
       "Quote before payment.",
       "Verify payment before registration.",
+      "For x402 domain purchase, settle x402 payment before Dynadot registration.",
+      "Require idempotencyKey for x402 purchase replay protection.",
       "Require explicit confirmation for live purchase, payment, nameserver changes, and domain pushes."
     ]
   };
@@ -472,15 +619,184 @@ async function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
   }
 }
 
-function sendJson(response: http.ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { "Content-Type": "application/json" });
+function sendJson(response: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
+  response.writeHead(status, { ...headers, "Content-Type": "application/json" });
   response.end(`${JSON.stringify(body, null, 2)}\n`);
+}
+
+function sendInstructions(response: http.ServerResponse, instructions: { status: number; headers: Record<string, string>; body?: unknown; isHtml?: boolean }) {
+  response.writeHead(instructions.status, {
+    ...instructions.headers,
+    "Content-Type": instructions.isHtml ? "text/html" : "application/json"
+  });
+  response.end(
+    instructions.isHtml
+      ? String(instructions.body ?? "")
+      : `${JSON.stringify(instructions.body ?? {}, null, 2)}\n`
+  );
 }
 
 function publicBaseUrl(request: http.IncomingMessage) {
   const forwardedProto = request.headers["x-forwarded-proto"];
   const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
   return `${proto || "https"}://${request.headers.host ?? "oyiradns.xyz"}`;
+}
+
+function assertX402Configured() {
+  if (!config.x402.enabled) {
+    throw new HttpError(404, "x402 purchase endpoint is disabled.");
+  }
+
+  if (!config.x402.payTo) {
+    throw new HttpError(503, "X402_PAY_TO or OKX_WALLET_ADDRESS must be configured before x402 purchases can run.");
+  }
+
+  if (!config.okx.apiKey || !config.okx.apiSecret || !config.okx.apiPassphrase) {
+    throw new HttpError(503, "OKX facilitator credentials are required before x402 purchases can run.");
+  }
+}
+
+async function getX402PurchaseServer() {
+  if (!x402PurchaseServer) {
+    const facilitator = new OKXFacilitatorClient({
+      apiKey: config.okx.apiKey,
+      secretKey: config.okx.apiSecret,
+      passphrase: config.okx.apiPassphrase,
+      baseUrl: config.okx.baseUrl,
+      syncSettle: config.x402.syncSettle
+    });
+    const x402Network = config.x402.network as `${string}:${string}`;
+    const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
+    const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
+      "POST /x402/domain/purchase": {
+        accepts: {
+          scheme: "exact",
+          network: x402Network,
+          payTo: config.x402.payTo,
+          price: async (context) => {
+            const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
+            return `$${prepared.quote.totalDue}`;
+          },
+          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
+        },
+        description: "Register a domain through Oyira after exact x402 payment settlement.",
+        mimeType: "application/json",
+        unpaidResponseBody: async (context) => {
+          const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
+
+          return {
+            contentType: "application/json",
+            body: {
+              error: "payment_required",
+              quote: {
+                id: prepared.quote.id,
+                domainName: prepared.quote.domainName,
+                years: prepared.quote.years,
+                totalDue: prepared.quote.totalDue,
+                currency: prepared.quote.currency,
+                paymentSymbol: prepared.quote.paymentSymbol,
+                expiresAt: prepared.quote.expiresAt
+              },
+              safeguards: [
+                "x402 payment must settle before registration.",
+                "idempotencyKey prevents duplicate registrations.",
+                "ALLOW_LIVE_PURCHASES must be true for live Dynadot registration."
+              ]
+            }
+          };
+        }
+      }
+    });
+    x402PurchaseServer = httpResourceServer.initialize().then(() => httpResourceServer);
+  }
+
+  return x402PurchaseServer;
+}
+
+async function prepareX402Purchase(body: Record<string, unknown>) {
+  const idempotencyKey = readRequiredString(body, "idempotencyKey");
+  const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+  const years = readNumber(body, "years", 1);
+  const registrationContact = readRequiredRegistrationContact(body);
+  const customerId = readOptionalString(body, "customerId");
+  const requestHash = hashX402PurchaseRequest({
+    customerId,
+    domainName,
+    years,
+    registrationContact,
+    nameservers: readStringArray(body, "nameservers")
+  });
+  const existing = await x402Purchases.getByIdempotencyKey(idempotencyKey);
+
+  if (existing) {
+    if (existing.requestHash !== requestHash) {
+      throw new HttpError(409, "Idempotency key already belongs to a different x402 purchase request.");
+    }
+
+    const quote = await domainQuotes.getQuote(existing.quoteId);
+    if (!quote) {
+      throw new HttpError(409, `Stored quote ${existing.quoteId} was not found for idempotency key ${idempotencyKey}.`);
+    }
+
+    return { record: existing, quote };
+  }
+
+  const quote = await domainQuotes.createQuote({
+    domainName,
+    years
+  });
+  const record = await x402Purchases.create({
+    idempotencyKey,
+    requestHash,
+    domainName: quote.domainName,
+    years: quote.years,
+    quoteId: quote.id,
+    customerId,
+    registrationContact
+  });
+
+  return { record, quote };
+}
+
+function x402RequestContext(
+  request: http.IncomingMessage,
+  url: URL,
+  body: Record<string, unknown>
+): HTTPRequestContext {
+  const adapter: HTTPAdapter = {
+    getHeader: (name) => {
+      const value = request.headers[name.toLowerCase()];
+      return Array.isArray(value) ? value[0] : value;
+    },
+    getMethod: () => request.method ?? "GET",
+    getPath: () => url.pathname,
+    getUrl: () => url.toString(),
+    getAcceptHeader: () => {
+      const value = request.headers.accept;
+      return Array.isArray(value) ? value.join(",") : value ?? "";
+    },
+    getUserAgent: () => {
+      const value = request.headers["user-agent"];
+      return Array.isArray(value) ? value.join(" ") : value ?? "";
+    },
+    getQueryParams: () => Object.fromEntries(url.searchParams.entries()),
+    getQueryParam: (name) => url.searchParams.get(name) ?? undefined,
+    getBody: () => body
+  };
+
+  return {
+    adapter,
+    path: url.pathname,
+    method: request.method ?? "GET"
+  };
+}
+
+function asBodyObject(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "Missing JSON body.");
+  }
+
+  return value as Record<string, unknown>;
 }
 
 function assertConfirmed(body: Record<string, unknown>) {
@@ -522,6 +838,22 @@ function readRegistrationContact(body: Record<string, unknown>): RegistrationCon
   }
 
   return value as RegistrationContact;
+}
+
+function readRequiredRegistrationContact(body: Record<string, unknown>): RegistrationContact {
+  const contact = readRegistrationContact(body);
+
+  if (!contact) {
+    throw new HttpError(400, "Missing required field: registrationContact.");
+  }
+
+  for (const key of ["registrantName", "email", "phone", "address", "city", "country"] as const) {
+    if (typeof contact[key] !== "string" || !contact[key]?.trim()) {
+      throw new HttpError(400, `Missing required registrationContact field: ${key}.`);
+    }
+  }
+
+  return contact;
 }
 
 async function updateActionSession(
@@ -641,6 +973,9 @@ function readyReport() {
     check("okx.walletAddress", Boolean(config.okx.walletAddress), "OKX wallet recipient is configured."),
     check("okx.createPath", Boolean(config.okx.createPath), "OKX payment create path is configured."),
     check("okx.statusPath", Boolean(config.okx.statusPath), "OKX payment status path is configured."),
+    check("x402.payTo", Boolean(config.x402.payTo), "x402 pay-to wallet is configured."),
+    check("x402.network", Boolean(config.x402.network), "x402 network is configured."),
+    check("stores.x402Purchases", Boolean(config.x402.purchaseStorePath), "x402 purchase store path is configured."),
     check("stores.quotes", Boolean(config.quotes.storePath), "Quote store path is configured."),
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
     check("stores.sessions", Boolean(config.sessions.storePath), "Session store path is configured."),

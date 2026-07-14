@@ -28,6 +28,15 @@ export interface OkxPaymentConfig {
   expectedNetwork: string;
 }
 
+export interface X402Config {
+  enabled: boolean;
+  network: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  syncSettle: boolean;
+  purchaseStorePath: string;
+}
+
 export interface MonitoringConfig {
   storePath: string;
   defaultCurrency: string;
@@ -82,6 +91,7 @@ export interface ServiceConfig {
   gemini: GeminiConfig;
   dynadot: DynadotConfig;
   okx: OkxPaymentConfig;
+  x402: X402Config;
   monitoring: MonitoringConfig;
   ledger: LedgerConfig;
   sessions: SessionConfig;
@@ -172,6 +182,14 @@ export function loadConfig(): ServiceConfig {
       requiredStatus: readEnv("OKX_REQUIRED_PAYMENT_STATUS", "completed"),
       expectedAsset: readEnv("OKX_SETTLEMENT_ASSET"),
       expectedNetwork: readEnv("OKX_NETWORK")
+    },
+    x402: {
+      enabled: readEnv("X402_ENABLED", "true") === "true",
+      network: readEnv("X402_NETWORK", "eip155:196"),
+      payTo: readEnv("X402_PAY_TO", readEnv("OKX_WALLET_ADDRESS")),
+      maxTimeoutSeconds: Number(readEnv("X402_MAX_TIMEOUT_SECONDS", "300")),
+      syncSettle: readEnv("X402_SYNC_SETTLE", "false") === "true",
+      purchaseStorePath: readEnv("X402_PURCHASE_STORE_PATH", "data/x402-domain-purchases.json")
     },
     monitoring: {
       storePath: readEnv("MONITOR_STORE_PATH", "data/domain-monitors.json"),

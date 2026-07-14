@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { OKXFacilitatorClient } from "@okxweb3/x402-core";
 import { x402HTTPResourceServer, type HTTPAdapter, type HTTPRequestContext } from "@okxweb3/x402-core/http";
 import { x402ResourceServer } from "@okxweb3/x402-core/server";
+import type { PaymentPayload } from "@okxweb3/x402-core/types";
 import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AuditLog } from "./audit-log.js";
 import { loadConfig } from "./config.js";
@@ -189,6 +190,7 @@ const server = http.createServer(async (request, response) => {
         throw new HttpError(500, "x402 purchase route did not require payment.");
       }
 
+      const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
       const prepared = await prepareX402Purchase(body);
 
       if (prepared.record.status === "registered") {
@@ -224,15 +226,16 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      const settledCustomerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
+
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "payment_settled",
         paymentTransaction: settlement.transaction,
-        customerId: x402SettledCustomerId(settlement)
+        customerId: settledCustomerId
       });
 
       const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
       const registrationContact = readRequiredRegistrationContact(body);
-      const settledCustomerId = x402SettledCustomerId(settlement);
       const registration = await dynadot.registerDomain({
         domainName: quote.domainName,
         years: quote.years,
@@ -745,14 +748,15 @@ function manifest() {
       mode: "a2mcp-x402",
       endpoint: "/x402/domain/purchase",
       requiresCustomerApiKey: false,
-      proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the settled x402 payer.",
+      proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
       requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
     },
     safety: [
       "Quote before payment.",
       "Verify payment before registration.",
       "For x402 domain purchase, settle x402 payment before Dynadot registration.",
-      "Bind x402 marketplace ledger ownership to the settled payer, not prompt-provided customerId.",
+      "Bind x402 marketplace ledger ownership to the verified payment payload payer, not prompt-provided customerId.",
+      "Reject x402 settlement if OKX returns a payer that does not match the verified payment payload payer.",
       "Require idempotencyKey for x402 purchase replay protection.",
       "Require explicit confirmation and ledger ownership for DNS record changes.",
       "Require explicit confirmation and ledger ownership for nameserver changes.",
@@ -1023,12 +1027,31 @@ function asBodyObject(value: unknown) {
   return value as Record<string, unknown>;
 }
 
-function x402SettledCustomerId(settlement: { payer?: string }) {
-  if (typeof settlement.payer !== "string" || !settlement.payer.trim()) {
-    throw new HttpError(502, "OKX x402 settlement did not include a payer identity.");
+function x402CustomerIdFromPayers(paymentPayer: string, settlement: { payer?: string }) {
+  const settlementPayer = x402NormalizePayer(settlement.payer);
+
+  if (settlementPayer && settlementPayer !== paymentPayer) {
+    throw new HttpError(502, "OKX x402 settlement payer did not match the verified payment payload payer.");
   }
 
-  return `x402:${settlement.payer.trim().toLowerCase()}`;
+  return `x402:${paymentPayer}`;
+}
+
+function x402PaymentPayloadPayer(paymentPayload: PaymentPayload) {
+  const payload = objectValue(paymentPayload.payload);
+  const authorization = objectValue(payload.authorization);
+  const permit2Authorization = objectValue(payload.permit2Authorization);
+  const payer = x402NormalizePayer(authorization.from) ?? x402NormalizePayer(permit2Authorization.from);
+
+  if (!payer) {
+    throw new HttpError(400, "x402 payment payload did not include a payer identity.");
+  }
+
+  return payer;
+}
+
+function x402NormalizePayer(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 }
 
 function assertConfirmed(body: Record<string, unknown>) {

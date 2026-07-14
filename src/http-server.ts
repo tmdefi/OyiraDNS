@@ -547,6 +547,80 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/agent/actions/link-project") {
+      const principal = await assertAuthorized(request);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const result = await auditedAction("link-project", body, principal, async () => {
+        assertConfirmed(body);
+        const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+        const customerId = readCustomerId(body, principal);
+        const skipLedgerCheck = principal.role === "owner" && body.skipLedgerCheck === true;
+
+        if (!skipLedgerCheck) {
+          const ledgerRecord = await domainLedger.getRecordByDomain(domainName, customerId);
+
+          if (!ledgerRecord) {
+            throw new HttpError(404, `No ledger record found for ${domainName}.`);
+          }
+        }
+
+        const preset = buildProjectPreset(body);
+
+        if (preset.kind === "nameservers") {
+          if (!config.dynadot.allowNameserverChanges) {
+            throw new HttpError(503, "Nameserver changes are disabled. Set ALLOW_NAMESERVER_CHANGES=true to enable nameserver updates.");
+          }
+
+          const dynadotNameservers = await dynadot.setNameservers(domainName, preset.nameservers);
+
+          await updateActionSession(body, principal, {
+            lastDomainName: domainName,
+            lastToolName: "link_project"
+          });
+
+          return {
+            agent: "oyira",
+            action: "link-project",
+            provider: preset.provider,
+            mode: "nameservers",
+            reply: `${domainName} has been linked to ${preset.provider} using nameservers.`,
+            domainName,
+            nameservers: preset.nameservers,
+            dynadotNameservers
+          };
+        }
+
+        if (!config.dynadot.allowDnsChanges) {
+          throw new HttpError(503, "DNS changes are disabled. Set ALLOW_DNS_CHANGES=true to enable DNS record updates.");
+        }
+
+        const dns = await dynadot.setDns2({
+          domainName,
+          records: preset.records,
+          ttl: readNumber(body, "ttl", 300),
+          append: readBoolean(body, "append", false)
+        });
+
+        await updateActionSession(body, principal, {
+          lastDomainName: domainName,
+          lastToolName: "link_project"
+        });
+
+        return {
+          agent: "oyira",
+          action: "link-project",
+          provider: preset.provider,
+          mode: "dns",
+          reply: `${domainName} has been linked to ${preset.provider} using DNS records.`,
+          domainName,
+          records: preset.records,
+          dns
+        };
+      });
+      sendJson(response, 200, result);
+      return;
+    }
+
     sendJson(response, 404, { error: "Not found." });
   } catch (error) {
     sendJson(response, error instanceof HttpError ? error.status : 500, {
@@ -583,7 +657,8 @@ function manifest() {
         purchaseDomain: "/agent/actions/purchase-domain",
         pushDomain: "/agent/actions/push-domain",
         configureDns: "/agent/actions/configure-dns",
-        setNameservers: "/agent/actions/set-nameservers"
+        setNameservers: "/agent/actions/set-nameservers",
+        linkProject: "/agent/actions/link-project"
       }
     },
     autoExecutableTools: [
@@ -595,7 +670,7 @@ function manifest() {
       "list_domain_quotes",
       "get_domain_ledger_record"
     ],
-    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers", "configure_dns"],
+    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers", "configure_dns", "link_project"],
     gatedActions: [
       {
         endpoint: "/agent/actions/create-payment",
@@ -626,6 +701,11 @@ function manifest() {
         endpoint: "/agent/actions/set-nameservers",
         required: ["confirm", "domainName", "nameservers"],
         optional: ["sessionId", "customerId", "skipLedgerCheck"]
+      },
+      {
+        endpoint: "/agent/actions/link-project",
+        required: ["confirm", "domainName", "provider"],
+        optional: ["sessionId", "customerId", "target", "frontendTarget", "backendTarget", "nameservers", "ttl", "append", "skipLedgerCheck"]
       }
     ],
     auth: {
@@ -641,6 +721,7 @@ function manifest() {
       "Require idempotencyKey for x402 purchase replay protection.",
       "Require explicit confirmation and ledger ownership for DNS record changes.",
       "Require explicit confirmation and ledger ownership for nameserver changes.",
+      "Require explicit confirmation and ledger ownership for project preset linking.",
       "Require explicit confirmation for live purchase, payment, nameserver changes, and domain pushes."
     ]
   };
@@ -977,6 +1058,75 @@ function isValidNameserver(nameserver: string) {
   return nameserver
     .split(".")
     .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+function buildProjectPreset(body: Record<string, unknown>):
+  | { kind: "dns"; provider: string; records: DnsRecordInput[] }
+  | { kind: "nameservers"; provider: string; nameservers: string[] } {
+  const provider = readRequiredString(body, "provider").trim().toLowerCase();
+  const target = readOptionalString(body, "target");
+
+  switch (provider) {
+    case "vercel":
+      return {
+        kind: "dns",
+        provider,
+        records: [
+          { type: "a", name: "@", value: readOptionalString(body, "rootTarget") ?? "76.76.21.21" },
+          { type: "cname", name: readOptionalString(body, "wwwName") ?? "www", value: target ?? "cname.vercel-dns.com" }
+        ]
+      };
+    case "railway":
+      return {
+        kind: "dns",
+        provider,
+        records: compactRecords([
+          target ? { type: "cname", name: readOptionalString(body, "wwwName") ?? "www", value: target } : undefined,
+          readOptionalString(body, "backendTarget")
+            ? { type: "cname", name: readOptionalString(body, "backendName") ?? "api", value: readOptionalString(body, "backendTarget") as string }
+            : undefined
+        ])
+      };
+    case "netlify":
+      return {
+        kind: "dns",
+        provider,
+        records: [
+          { type: "cname", name: readOptionalString(body, "wwwName") ?? "www", value: target ?? readRequiredString(body, "target") }
+        ]
+      };
+    case "cloudflare":
+      return {
+        kind: "nameservers",
+        provider,
+        nameservers: readNameservers(body)
+      };
+    case "custom":
+    case "custom-frontend-backend": {
+      const frontendTarget = readOptionalString(body, "frontendTarget") ?? target;
+      const backendTarget = readOptionalString(body, "backendTarget");
+      const records = compactRecords([
+        frontendTarget ? { type: "cname", name: readOptionalString(body, "frontendName") ?? "www", value: frontendTarget } : undefined,
+        backendTarget ? { type: "cname", name: readOptionalString(body, "backendName") ?? "api", value: backendTarget } : undefined
+      ]);
+
+      if (records.length === 0) {
+        throw new HttpError(400, "Provide target, frontendTarget, or backendTarget for custom project linking.");
+      }
+
+      return {
+        kind: "dns",
+        provider,
+        records
+      };
+    }
+    default:
+      throw new HttpError(400, `Unsupported project provider: ${provider}.`);
+  }
+}
+
+function compactRecords(records: Array<DnsRecordInput | undefined>) {
+  return records.filter((record): record is DnsRecordInput => Boolean(record));
 }
 
 function readDnsRecords(body: Record<string, unknown>): DnsRecordInput[] {

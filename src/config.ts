@@ -154,7 +154,7 @@ export function loadConfig(): ServiceConfig {
       ownerToken: readEnv("API_AUTH_TOKEN"),
       userApiKeys: parseUserApiKeys(readEnv("OYIRA_USER_API_KEYS")),
       userApiKeyStorePath: readEnv("OYIRA_USER_API_KEY_STORE_PATH", "data/oyira-user-api-keys.json"),
-      publicSignupEnabled: readEnv("OYIRA_PUBLIC_SIGNUP_ENABLED", "true") === "true"
+      publicSignupEnabled: readEnv("OYIRA_PUBLIC_SIGNUP_ENABLED", "false") === "true"
     },
     gemini: {
       apiKey: readFirstEnv(["GOOGLE_API_KEY", "GEMINI_API_KEY"]),

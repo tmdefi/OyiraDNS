@@ -259,7 +259,7 @@ function sessionPatchFrom(decision: AgentDecision, execution: OyiraToolExecution
   return compactPatch({
     lastDomainName: readKnownString(nextArgs, "domainName") ?? extractString(result, ["domainName"]),
     lastQuoteId: extractString(result, ["id", "quoteId"]),
-    lastPaymentId: extractString(result, ["paymentId", "id"]),
+    lastPaymentId: extractPaymentId(result),
     lastToolName: execution?.toolName ?? decision.nextSteps[0]?.toolName
   });
 }
@@ -391,9 +391,15 @@ function formatLedgerRecord(result: unknown) {
 }
 
 function extractAvailability(value: unknown): boolean | null {
+  const directAvailability = findAvailabilityValue(value);
+
+  if (directAvailability !== null) {
+    return directAvailability;
+  }
+
   const values = flatten(value).map((entry) => entry.toLowerCase());
 
-  if (values.some((entry) => ["unavailable", "taken", "not available", "false", "no"].some((hint) => entry === hint || entry.includes(hint)))) {
+  if (values.some((entry) => ["unavailable", "taken", "not available", "false"].some((hint) => entry === hint || entry.includes(hint)))) {
     return false;
   }
 
@@ -402,6 +408,60 @@ function extractAvailability(value: unknown): boolean | null {
   }
 
   return null;
+}
+
+function findAvailabilityValue(value: unknown): boolean | null {
+  const queue: unknown[] = [value];
+
+  while (queue.length > 0) {
+    const entry = queue.shift();
+
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    if (Array.isArray(entry)) {
+      queue.push(...entry);
+      continue;
+    }
+
+    for (const [key, nested] of Object.entries(entry)) {
+      const normalizedKey = key.toLowerCase().replaceAll("-", "").replaceAll("_", "");
+
+      if (["available", "availability", "avail"].includes(normalizedKey)) {
+        const normalizedValue = String(nested).trim().toLowerCase();
+
+        if (["yes", "true", "available"].includes(normalizedValue)) {
+          return true;
+        }
+
+        if (["no", "false", "unavailable", "taken", "not available"].includes(normalizedValue)) {
+          return false;
+        }
+      }
+
+      if (nested && typeof nested === "object") {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractPaymentId(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const payment = record.payment;
+
+  if (payment && typeof payment === "object" && !Array.isArray(payment)) {
+    return extractString(payment, ["paymentId", "id"]);
+  }
+
+  return extractString(record, ["paymentId"]);
 }
 
 function extractPrice(value: unknown) {

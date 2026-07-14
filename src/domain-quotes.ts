@@ -244,8 +244,14 @@ export class DomainQuoteService {
   }
 
   private extractAvailability(response: unknown): boolean | null {
+    const directAvailability = this.findAvailabilityValue(response);
+
+    if (directAvailability !== null) {
+      return directAvailability;
+    }
+
     const values = this.flatten(response);
-    const unavailableHints = ["unavailable", "taken", "not available", "false", "no"];
+    const unavailableHints = ["unavailable", "taken", "not available", "false"];
     const availableHints = ["available", "true", "yes"];
 
     for (const value of values) {
@@ -259,6 +265,45 @@ export class DomainQuoteService {
       const normalized = value.toLowerCase();
       if (availableHints.some((hint) => normalized === hint || normalized.includes(hint))) {
         return true;
+      }
+    }
+
+    return null;
+  }
+
+  private findAvailabilityValue(response: unknown): boolean | null {
+    const queue: unknown[] = [response];
+
+    while (queue.length > 0) {
+      const value = queue.shift();
+
+      if (!value || typeof value !== "object") {
+        continue;
+      }
+
+      if (Array.isArray(value)) {
+        queue.push(...value);
+        continue;
+      }
+
+      for (const [key, entry] of Object.entries(value)) {
+        const normalizedKey = key.toLowerCase().replaceAll("_", "").replaceAll("-", "");
+
+        if (["available", "availability", "avail"].includes(normalizedKey)) {
+          const normalizedValue = String(entry).trim().toLowerCase();
+
+          if (["yes", "true", "available"].includes(normalizedValue)) {
+            return true;
+          }
+
+          if (["no", "false", "unavailable", "taken", "not available"].includes(normalizedValue)) {
+            return false;
+          }
+        }
+
+        if (entry && typeof entry === "object") {
+          queue.push(entry);
+        }
       }
     }
 

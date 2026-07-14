@@ -34,6 +34,37 @@ export class X402PurchaseStore {
     return store.purchases.find((purchase) => purchase.idempotencyKey === idempotencyKey) ?? null;
   }
 
+  async list(filter: { idempotencyKey?: string; domainName?: string; customerId?: string; x402Payer?: string; status?: X402PurchaseRecord["status"] } = {}) {
+    const store = await this.readStore();
+    const normalizedDomain = filter.domainName ? filter.domainName.trim().toLowerCase() : undefined;
+    const normalizedCustomerId = filter.customerId ? filter.customerId.trim().toLowerCase() : undefined;
+    const normalizedX402Payer = filter.x402Payer ? filter.x402Payer.trim().toLowerCase() : undefined;
+
+    return store.purchases.filter((purchase) => {
+      if (filter.idempotencyKey && purchase.idempotencyKey !== filter.idempotencyKey) {
+        return false;
+      }
+
+      if (normalizedDomain && purchase.domainName.trim().toLowerCase() !== normalizedDomain) {
+        return false;
+      }
+
+      if (normalizedCustomerId && purchase.customerId?.trim().toLowerCase() !== normalizedCustomerId) {
+        return false;
+      }
+
+      if (normalizedX402Payer && purchase.x402Payer?.trim().toLowerCase() !== normalizedX402Payer) {
+        return false;
+      }
+
+      if (filter.status && purchase.status !== filter.status) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
   async create(input: {
     idempotencyKey: string;
     requestHash: string;

@@ -96,6 +96,23 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/agent/x402/purchases") {
+      assertOwner(await assertAuthorized(request));
+      const purchases = await x402Purchases.list({
+        idempotencyKey: url.searchParams.get("idempotencyKey") ?? undefined,
+        domainName: url.searchParams.get("domainName") ?? undefined,
+        customerId: url.searchParams.get("customerId") ?? undefined,
+        x402Payer: url.searchParams.get("x402Payer") ?? undefined,
+        status: readX402PurchaseStatus(url.searchParams.get("status"))
+      });
+
+      sendJson(response, 200, {
+        count: purchases.length,
+        purchases: purchases.map(publicX402Purchase)
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/auth/signup") {
       if (!config.auth.publicSignupEnabled) {
         throw new HttpError(404, "Signup is not enabled.");
@@ -686,6 +703,7 @@ function manifest() {
       signup: "/auth/signup",
       adminApiKeys: "/admin/api-keys",
       customerDomains: "/agent/customer/domains",
+      x402Purchases: "/agent/x402/purchases",
       message: "/agent/message",
       x402Purchase: "/x402/domain/purchase",
       actions: {
@@ -1083,6 +1101,18 @@ function readOptionalString(body: Record<string, unknown>, key: string) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function readX402PurchaseStatus(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value === "challenge_created" || value === "payment_settled" || value === "registered" || value === "failed") {
+    return value;
+  }
+
+  throw new HttpError(400, "Unsupported x402 purchase status filter.");
+}
+
 function readNumber(body: Record<string, unknown>, key: string, fallback: number) {
   const value = body[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -1398,6 +1428,24 @@ function publicLedgerRecord(record: Awaited<ReturnType<DomainLedger["listRecords
     hasDomainPush: Boolean(record.domainPush),
     pushedToAccount: record.domainPush?.targetAccount,
     pushedToEmail: record.domainPush?.targetEmail,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  });
+}
+
+function publicX402Purchase(record: Awaited<ReturnType<X402PurchaseStore["list"]>>[number]) {
+  return compactRecord({
+    id: record.id,
+    idempotencyKey: record.idempotencyKey,
+    domainName: record.domainName,
+    years: record.years,
+    quoteId: record.quoteId,
+    customerId: record.customerId,
+    x402Payer: record.x402Payer,
+    status: record.status,
+    paymentTransaction: record.paymentTransaction,
+    ledgerRecordId: record.ledgerRecordId,
+    error: record.error,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   });

@@ -1,0 +1,35 @@
+{
+  "name": "domain-purchasing-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for agent-driven domain search and purchasing through Dynadot.",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "dynadot:pricing-check": "node dist/scripts/check-dynadot-pricing.js",
+    "dynadot:pricing-probe": "node dist/scripts/probe-dynadot-pricing.js",
+    "domain:purchase-flow": "node dist/scripts/domain-purchase-flow.js",
+    "monitor:domains": "node dist/scripts/check-domain-monitors.js",
+    "monitor:worker": "node dist/scripts/monitor-worker.js",
+    "okx:create-payment": "node dist/scripts/create-payment.js",
+    "domain:search-variants": "node dist/scripts/search-domain-variants.js",
+    "agent:preview": "node dist/scripts/agent-preview.js",
+    "agent:http": "node dist/http-server.js",
+    "start": "node dist/http-server.js",
+    "start:mcp": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.15.0",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

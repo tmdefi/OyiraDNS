@@ -73,6 +73,28 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/agent/customer/domains") {
+      const principal = await assertAuthorized(request);
+      const requestedCustomerId = url.searchParams.get("customerId") ?? undefined;
+      const customerId = principal.role === "customer" ? principal.customerId : requestedCustomerId;
+
+      if (!customerId) {
+        throw new HttpError(400, "Provide customerId.");
+      }
+
+      const records = await domainLedger.listRecords({
+        customerId,
+        domainName: url.searchParams.get("domainName") ?? undefined
+      });
+
+      sendJson(response, 200, {
+        customerId,
+        count: records.length,
+        domains: records.map(publicLedgerRecord)
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/auth/signup") {
       if (!config.auth.publicSignupEnabled) {
         throw new HttpError(404, "Signup is not enabled.");
@@ -649,6 +671,7 @@ function manifest() {
       manifest: "/agent/manifest",
       signup: "/auth/signup",
       adminApiKeys: "/admin/api-keys",
+      customerDomains: "/agent/customer/domains",
       message: "/agent/message",
       x402Purchase: "/x402/domain/purchase",
       actions: {
@@ -1312,6 +1335,23 @@ function auditResult(result: Record<string, unknown>) {
     paymentStatus: readOptionalString(payment, "status"),
     domainName: readOptionalString(quote, "domainName") ?? readOptionalString(ledgerRecord, "domainName"),
     ledgerRecordId: readOptionalString(ledgerRecord, "id")
+  });
+}
+
+function publicLedgerRecord(record: Awaited<ReturnType<DomainLedger["listRecords"]>>[number]) {
+  return compactRecord({
+    id: record.id,
+    domainName: record.domainName,
+    customerId: record.customerId,
+    years: record.years,
+    currency: record.currency,
+    paymentId: record.paymentId,
+    hasRegistrationContact: Boolean(record.registrationContact),
+    hasDomainPush: Boolean(record.domainPush),
+    pushedToAccount: record.domainPush?.targetAccount,
+    pushedToEmail: record.domainPush?.targetEmail,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
   });
 }
 

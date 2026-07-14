@@ -352,18 +352,30 @@ function formatConfirmationRequired(decision: AgentDecision, execution: OyiraToo
 
 function formatVariantResult(result: unknown) {
   const results = extractArray(result, "results");
+  const currency = extractString(result, ["currency"]) ?? "USD";
   const failures = results.filter((entry) => extractString(entry, ["error"]));
-  const available = results
-    .filter((entry) => extractBoolean(entry, "available") === true)
-    .slice(0, 5)
-    .map((entry) => {
+
+  if (results.length > 0 && failures.length !== results.length) {
+    const rows = results.map((entry) => {
       const domainName = extractString(entry, ["domainName"]) ?? "unknown";
+      const available = extractBoolean(entry, "available");
       const price = extractString(entry, ["registrationPrice"]);
-      return price ? `${domainName} (${price})` : domainName;
+      const error = extractString(entry, ["error"]);
+
+      if (available === true) {
+        return price
+          ? `${domainName} - available, 1-year price ${formatVariantPrice(price, currency)}`
+          : `${domainName} - available, 1-year price unavailable`;
+      }
+
+      if (available === false) {
+        return `${domainName} - unavailable`;
+      }
+
+      return `${domainName} - ${error ? "check failed" : "availability unclear"}`;
     });
 
-  if (available.length > 0) {
-    return `I found available options: ${available.join(", ")}. Pick one and I can quote it.`;
+    return `I checked these TLDs:\n${rows.join("\n")}\nPick one that is available and I can create a quote.`;
   }
 
   if (results.length > 0 && failures.length === results.length) {
@@ -385,6 +397,12 @@ function formatQuoteResult(result: unknown) {
   }
 
   return `Quote ready for ${domainName ?? "the domain"}: ${totalDue ?? "amount pending"} ${paymentSymbol ?? ""}. Quote ID: ${quoteId}. It ${formatQuoteExpiry(expiresAt)}.`;
+}
+
+function formatVariantPrice(price: string, currency: string) {
+  const amount = Number(price);
+  const formattedPrice = Number.isFinite(amount) ? amount.toFixed(2) : price;
+  return `${formattedPrice} ${currency}`;
 }
 
 function formatQuoteExpiry(expiresAt?: string) {

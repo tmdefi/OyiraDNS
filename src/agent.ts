@@ -50,7 +50,7 @@ Core operating rules:
 - Prefer the existing MCP tools over manual instructions.
 
 Recommended flow:
-1. Use search_domain_variants when the user gives a brand/name without a TLD.
+1. Use search_domain_variants when the user gives a brand/name without a TLD. The response should compare the configured TLDs with 1-year pricing for available domains and "unavailable" for taken domains.
 2. Use search_domain when the user gives a full domain.
 3. Use quote_domain for a chosen available domain.
 4. Use create_payment_from_quote after the customer accepts the quote.
@@ -263,15 +263,15 @@ function extractBaseName(text: string, domainName?: string) {
     return undefined;
   }
 
-  const candidate = text
+  const candidates = text
     .toLowerCase()
     .replace(/https?:\/\//g, " ")
     .replace(/[^a-z0-9-]+/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .find((word) => !STOP_WORDS.has(word) && /[a-z]/.test(word));
+    .filter((word) => !STOP_WORDS.has(word) && /[a-z]/.test(word));
 
-  return candidate;
+  return candidates.at(-1);
 }
 
 function matchValue(text: string, pattern: RegExp) {
@@ -341,6 +341,7 @@ const STOP_WORDS = new Set([
   "for",
   "how",
   "i",
+  "if",
   "is",
   "it",
   "lets",

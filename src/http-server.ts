@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import { AuditLog } from "./audit-log.js";
 import { loadConfig } from "./config.js";
 import { DynadotClient, type RegistrationContact } from "./dynadot.js";
@@ -20,6 +21,12 @@ const gemini = new GeminiClient(config.gemini);
 const sessions = new OyiraSessionStore(config.sessions);
 const auditLog = new AuditLog(config.audit);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
+
+interface AuthPrincipal {
+  role: "owner" | "customer";
+  customerId?: string;
+  keyId?: string;
+}
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -58,17 +65,17 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/message") {
-      assertAuthorized(request);
-      const body = await readJsonBody<OyiraMessageInput>(request);
+      const principal = assertAuthorized(request);
+      const body = withPrincipal(await readJsonBody<OyiraMessageInput>(request), principal);
       const result = await oyira.handleMessage(body);
       sendJson(response, 200, result);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/create-payment") {
-      assertAuthorized(request);
+      const principal = assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
-      const result = await auditedAction("create-payment", body, async () => {
+      const result = await auditedAction("create-payment", body, principal, async () => {
         assertConfirmed(body);
         const quoteId = readRequiredString(body, "quoteId");
         const recipient = readOptionalString(body, "recipient") ?? config.okx.walletAddress;
@@ -84,7 +91,7 @@ const server = http.createServer(async (request, response) => {
           externalId: readOptionalString(body, "externalId")
         });
 
-        await updateActionSession(body, {
+        await updateActionSession(body, principal, {
           lastDomainName: quote.domainName,
           lastQuoteId: quote.id,
           lastPaymentId: quote.payment?.paymentId,
@@ -103,9 +110,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/verify-payment") {
-      assertAuthorized(request);
+      const principal = assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
-      const result = await auditedAction("verify-payment", body, async () => {
+      const result = await auditedAction("verify-payment", body, principal, async () => {
         assertConfirmed(body);
         const payment = await okx.verifyPayment({
           paymentId: readRequiredString(body, "paymentId"),
@@ -113,7 +120,7 @@ const server = http.createServer(async (request, response) => {
           expectedCurrency: readOptionalString(body, "expectedPaymentCurrency")
         });
 
-        await updateActionSession(body, {
+        await updateActionSession(body, principal, {
           lastPaymentId: payment.id,
           lastToolName: "verify_payment"
         });
@@ -130,9 +137,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/purchase-domain") {
-      assertAuthorized(request);
+      const principal = assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
-      const result = await auditedAction("purchase-domain", body, async () => {
+      const result = await auditedAction("purchase-domain", body, principal, async () => {
         assertConfirmed(body);
 
         const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
@@ -172,7 +179,7 @@ const server = http.createServer(async (request, response) => {
         });
         const ledgerRecord = await domainLedger.createRecord({
           domainName,
-          customerId: readOptionalString(body, "customerId"),
+          customerId: readCustomerId(body, principal),
           years,
           currency: quote.currency,
           paymentId,
@@ -181,7 +188,7 @@ const server = http.createServer(async (request, response) => {
           payment
         });
 
-        await updateActionSession(body, {
+        await updateActionSession(body, principal, {
           lastDomainName: domainName,
           lastQuoteId: quote.id,
           lastPaymentId: payment.id,
@@ -202,9 +209,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/push-domain") {
-      assertAuthorized(request);
+      const principal = assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
-      const result = await auditedAction("push-domain", body, async () => {
+      const result = await auditedAction("push-domain", body, principal, async () => {
         assertConfirmed(body);
         const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
         const targetAccount = readOptionalString(body, "targetAccount");
@@ -222,13 +229,13 @@ const server = http.createServer(async (request, response) => {
         });
         const ledgerRecord = await domainLedger.recordDomainPush({
           domainName,
-          customerId: readOptionalString(body, "customerId"),
+          customerId: readCustomerId(body, principal),
           targetAccount,
           targetEmail,
           dynadotPush
         });
 
-        await updateActionSession(body, {
+        await updateActionSession(body, principal, {
           lastDomainName: domainName,
           lastToolName: "push_domain"
         });
@@ -311,6 +318,11 @@ function manifest() {
         optional: ["sessionId", "customerId", "message"]
       }
     ],
+    auth: {
+      schemes: ["Authorization: Bearer <token>", "x-api-auth-token: <token>"],
+      userApiKeys: "Set OYIRA_USER_API_KEYS as customerId:token or customerId:token:keyId entries.",
+      ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access."
+    },
     safety: [
       "Quote before payment.",
       "Verify payment before registration.",
@@ -319,20 +331,58 @@ function manifest() {
   };
 }
 
-function assertAuthorized(request: http.IncomingMessage) {
-  if (!config.apiAuthToken) {
-    return;
+function assertAuthorized(request: http.IncomingMessage): AuthPrincipal {
+  const token = readAuthToken(request);
+
+  if (config.auth.ownerToken && token && secureEqual(token, config.auth.ownerToken)) {
+    return { role: "owner", keyId: "owner" };
   }
 
-  const authorization = request.headers.authorization ?? "";
-  const tokenHeader = request.headers["x-api-auth-token"];
-  const token = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+  const matchedKey = config.auth.userApiKeys.find((entry) => token && secureEqual(token, entry.token));
 
-  if (authorization === `Bearer ${config.apiAuthToken}` || token === config.apiAuthToken) {
-    return;
+  if (matchedKey) {
+    return {
+      role: "customer",
+      customerId: matchedKey.customerId,
+      keyId: matchedKey.keyId
+    };
+  }
+
+  if (!config.auth.ownerToken && config.auth.userApiKeys.length === 0) {
+    return { role: "owner", keyId: "unauthenticated" };
   }
 
   throw new HttpError(401, "Unauthorized.");
+}
+
+function readAuthToken(request: http.IncomingMessage) {
+  const authorization = request.headers.authorization ?? "";
+  const tokenHeader = request.headers["x-api-auth-token"];
+  const headerToken = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
+
+  return bearerMatch?.[1]?.trim() || headerToken?.trim();
+}
+
+function secureEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function withPrincipal<T extends OyiraMessageInput>(body: T, principal: AuthPrincipal): T {
+  if (principal.role !== "customer" || !principal.customerId) {
+    return body;
+  }
+
+  return {
+    ...body,
+    sessionId: body.sessionId ?? principal.customerId,
+    customer: {
+      ...body.customer,
+      id: principal.customerId
+    }
+  };
 }
 
 async function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
@@ -403,6 +453,7 @@ function readRegistrationContact(body: Record<string, unknown>): RegistrationCon
 
 async function updateActionSession(
   body: Record<string, unknown>,
+  principal: AuthPrincipal,
   patch: {
     lastDomainName?: string;
     lastQuoteId?: string;
@@ -411,7 +462,7 @@ async function updateActionSession(
   }
 ) {
   const sessionId = readOptionalString(body, "sessionId");
-  const customerId = readOptionalString(body, "customerId");
+  const customerId = readCustomerId(body, principal);
 
   if (!sessionId && !customerId) {
     return null;
@@ -428,12 +479,13 @@ async function updateActionSession(
 async function auditedAction<T extends Record<string, unknown>>(
   action: string,
   body: Record<string, unknown>,
+  principal: AuthPrincipal,
   handler: () => Promise<T>
 ) {
   await auditLog.append({
     action,
     status: "attempt",
-    request: auditRequest(body)
+    request: auditRequest(body, principal)
   });
 
   try {
@@ -441,7 +493,7 @@ async function auditedAction<T extends Record<string, unknown>>(
     await auditLog.append({
       action,
       status: "success",
-      request: auditRequest(body),
+      request: auditRequest(body, principal),
       result: auditResult(result)
     });
     return result;
@@ -449,17 +501,20 @@ async function auditedAction<T extends Record<string, unknown>>(
     await auditLog.append({
       action,
       status: "failure",
-      request: auditRequest(body),
+      request: auditRequest(body, principal),
       error: error instanceof Error ? error.message : String(error)
     });
     throw error;
   }
 }
 
-function auditRequest(body: Record<string, unknown>) {
+function auditRequest(body: Record<string, unknown>, principal: AuthPrincipal) {
   return compactRecord({
+    authRole: principal.role,
+    authCustomerId: principal.customerId,
+    authKeyId: principal.keyId,
     sessionId: readOptionalString(body, "sessionId"),
-    customerId: readOptionalString(body, "customerId"),
+    customerId: readCustomerId(body, principal),
     domainName: readOptionalString(body, "domainName"),
     quoteId: readOptionalString(body, "quoteId"),
     paymentId: readOptionalString(body, "paymentId"),
@@ -468,6 +523,14 @@ function auditRequest(body: Record<string, unknown>) {
     confirm: body.confirm === true,
     hasRegistrationContact: Boolean(body.registrationContact)
   });
+}
+
+function readCustomerId(body: Record<string, unknown>, principal: AuthPrincipal) {
+  if (principal.role === "customer") {
+    return principal.customerId;
+  }
+
+  return readOptionalString(body, "customerId");
 }
 
 function auditResult(result: Record<string, unknown>) {
@@ -511,7 +574,9 @@ function readyReport() {
     check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured.")
   ];
   const warnings = [
-    config.apiAuthToken ? null : "API_AUTH_TOKEN is not set; HTTP action endpoints are unauthenticated.",
+    config.auth.ownerToken || config.auth.userApiKeys.length > 0
+      ? null
+      : "No API auth tokens are set; HTTP action endpoints are unauthenticated.",
     config.dynadot.env === "live" && !config.dynadot.allowLivePurchases
       ? "Dynadot live environment is selected, but live purchases are disabled."
       : null,

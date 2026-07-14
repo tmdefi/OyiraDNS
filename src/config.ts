@@ -46,6 +46,17 @@ export interface AuditConfig {
   logPath: string;
 }
 
+export interface UserApiKey {
+  customerId: string;
+  keyId: string;
+  token: string;
+}
+
+export interface AuthConfig {
+  ownerToken: string;
+  userApiKeys: UserApiKey[];
+}
+
 export interface QuoteConfig {
   storePath: string;
   ttlSeconds: number;
@@ -65,7 +76,7 @@ export interface ServiceConfig {
   name: string;
   nodeEnv: string;
   port: number;
-  apiAuthToken: string;
+  auth: AuthConfig;
   gemini: GeminiConfig;
   dynadot: DynadotConfig;
   okx: OkxPaymentConfig;
@@ -103,6 +114,18 @@ function parseCsv(value: string): string[] {
     .filter(Boolean);
 }
 
+function parseUserApiKeys(value: string): UserApiKey[] {
+  return parseCsv(value).map((entry) => {
+    const [customerId, token, keyId] = entry.split(":").map((part) => part.trim());
+
+    return {
+      customerId,
+      token,
+      keyId: keyId || customerId
+    };
+  }).filter((entry) => entry.customerId && entry.token);
+}
+
 export function loadConfig(): ServiceConfig {
   const dynadotEnv = parseDynadotEnv(readEnv("DYNADOT_ENV", "sandbox"));
   const prefix = dynadotEnv === "live" ? "DYNADOT_LIVE" : "DYNADOT_SANDBOX";
@@ -113,7 +136,10 @@ export function loadConfig(): ServiceConfig {
     name: readEnv("SERVICE_NAME", "domain-purchasing-mcp"),
     nodeEnv: readEnv("NODE_ENV", "development"),
     port: Number(readEnv("PORT", "3000")),
-    apiAuthToken: readEnv("API_AUTH_TOKEN"),
+    auth: {
+      ownerToken: readEnv("API_AUTH_TOKEN"),
+      userApiKeys: parseUserApiKeys(readEnv("OYIRA_USER_API_KEYS"))
+    },
     gemini: {
       apiKey: readFirstEnv(["GOOGLE_API_KEY", "GEMINI_API_KEY"]),
       model: readEnv("GEMINI_MODEL", "gemini-3.1-flash-lite"),

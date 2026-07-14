@@ -1,7 +1,84 @@
-node_modules/
-dist/
-data/
-DarkONNET/
-.env
-.env.local
+# Logs
+logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Diagnostic reports
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+data/
+
+# Oyira workspace exclusions
+DarkONNET/
+
+# Coverage and build output
+lib-cov
+coverage
+*.lcov
+.nyc_output
+build/Release
+dist/
+dist
+.output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional caches
+.npm
+.eslintcache
+.stylelintcache
+.cache
+.parcel-cache
+.vite/
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+
+# Framework output
+.next
+out
+.nuxt
+.vuepress/dist
+.temp
+.svelte-kit/
+**/.vitepress/dist
+**/.vitepress/cache
+.docusaurus
+.serverless/
+.fusebox/
+.dynamodb/
+.firebase/
+.tern-port
+.vscode-test
+
+# Package manager artifacts
+*.tgz
+.yarn-integrity
+.pnpm-store
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Vite timestamp files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

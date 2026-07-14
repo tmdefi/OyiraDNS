@@ -226,11 +226,13 @@ const server = http.createServer(async (request, response) => {
 
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "payment_settled",
-        paymentTransaction: settlement.transaction
+        paymentTransaction: settlement.transaction,
+        customerId: x402SettledCustomerId(settlement)
       });
 
       const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
       const registrationContact = readRequiredRegistrationContact(body);
+      const settledCustomerId = x402SettledCustomerId(settlement);
       const registration = await dynadot.registerDomain({
         domainName: quote.domainName,
         years: quote.years,
@@ -241,7 +243,7 @@ const server = http.createServer(async (request, response) => {
       });
       const ledgerRecord = await domainLedger.createRecord({
         domainName: quote.domainName,
-        customerId: readOptionalString(body, "customerId"),
+        customerId: settledCustomerId,
         years: quote.years,
         currency: quote.currency,
         paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
@@ -258,14 +260,15 @@ const server = http.createServer(async (request, response) => {
 
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "registered",
-        ledgerRecordId: ledgerRecord.id
+        ledgerRecordId: ledgerRecord.id,
+        customerId: settledCustomerId
       });
       await auditLog.append({
         action: "x402-domain-purchase",
         status: "success",
         request: auditRequest(body, {
           role: "customer",
-          customerId: readOptionalString(body, "customerId"),
+          customerId: settledCustomerId,
           keyId: readOptionalString(body, "idempotencyKey")
         }),
         result: {
@@ -742,13 +745,14 @@ function manifest() {
       mode: "a2mcp-x402",
       endpoint: "/x402/domain/purchase",
       requiresCustomerApiKey: false,
-      proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration.",
+      proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the settled x402 payer.",
       requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
     },
     safety: [
       "Quote before payment.",
       "Verify payment before registration.",
       "For x402 domain purchase, settle x402 payment before Dynadot registration.",
+      "Bind x402 marketplace ledger ownership to the settled payer, not prompt-provided customerId.",
       "Require idempotencyKey for x402 purchase replay protection.",
       "Require explicit confirmation and ledger ownership for DNS record changes.",
       "Require explicit confirmation and ledger ownership for nameserver changes.",
@@ -1017,6 +1021,14 @@ function asBodyObject(value: unknown) {
   }
 
   return value as Record<string, unknown>;
+}
+
+function x402SettledCustomerId(settlement: { payer?: string }) {
+  if (typeof settlement.payer !== "string" || !settlement.payer.trim()) {
+    throw new HttpError(502, "OKX x402 settlement did not include a payer identity.");
+  }
+
+  return `x402:${settlement.payer.trim().toLowerCase()}`;
 }
 
 function assertConfirmed(body: Record<string, unknown>) {

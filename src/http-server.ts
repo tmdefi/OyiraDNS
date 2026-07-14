@@ -10,6 +10,7 @@ import { GeminiClient } from "./gemini.js";
 import { OkxPaymentClient } from "./okx.js";
 import { OyiraService, type OyiraMessageInput } from "./oyira-service.js";
 import { OyiraSessionStore } from "./oyira-sessions.js";
+import { UserApiKeyStore } from "./user-api-keys.js";
 
 const config = loadConfig();
 const dynadot = new DynadotClient(config.dynadot);
@@ -20,6 +21,7 @@ const domainQuotes = new DomainQuoteService(config.quotes, dynadot, okx);
 const gemini = new GeminiClient(config.gemini);
 const sessions = new OyiraSessionStore(config.sessions);
 const auditLog = new AuditLog(config.audit);
+const userApiKeys = new UserApiKeyStore(config.auth);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
 
 interface AuthPrincipal {
@@ -64,8 +66,68 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/auth/signup") {
+      if (!config.auth.publicSignupEnabled) {
+        throw new HttpError(404, "Signup is not enabled.");
+      }
+
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const created = await userApiKeys.createKey({
+        customerId: readOptionalString(body, "customerId"),
+        keyId: readOptionalString(body, "keyId"),
+        label: readOptionalString(body, "label")
+      });
+      sendJson(response, 201, {
+        customerId: created.key.customerId,
+        keyId: created.key.keyId,
+        apiKey: created.token,
+        tokenType: "Bearer",
+        baseUrl: publicBaseUrl(request),
+        warning: "Store this API key now. Oyira only shows it once."
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/api-keys") {
+      assertOwner(await assertAuthorized(request));
+      sendJson(response, 200, {
+        keys: await userApiKeys.listKeys(url.searchParams.get("customerId") ?? undefined)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/api-keys") {
+      assertOwner(await assertAuthorized(request));
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const created = await userApiKeys.createKey({
+        customerId: readOptionalString(body, "customerId"),
+        keyId: readOptionalString(body, "keyId"),
+        label: readOptionalString(body, "label")
+      });
+      sendJson(response, 201, {
+        customerId: created.key.customerId,
+        keyId: created.key.keyId,
+        apiKey: created.token,
+        tokenType: "Bearer",
+        warning: "Store this API key now. Oyira only shows it once."
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/api-keys/revoke") {
+      assertOwner(await assertAuthorized(request));
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const revoked = await userApiKeys.revokeKey(readRequiredString(body, "keyId"));
+      if (!revoked) {
+        throw new HttpError(404, "API key not found.");
+      }
+
+      sendJson(response, 200, { key: revoked });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/agent/message") {
-      const principal = assertAuthorized(request);
+      const principal = await assertAuthorized(request);
       const body = withPrincipal(await readJsonBody<OyiraMessageInput>(request), principal);
       const result = await oyira.handleMessage(body);
       sendJson(response, 200, result);
@@ -73,7 +135,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/create-payment") {
-      const principal = assertAuthorized(request);
+      const principal = await assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
       const result = await auditedAction("create-payment", body, principal, async () => {
         assertConfirmed(body);
@@ -110,7 +172,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/verify-payment") {
-      const principal = assertAuthorized(request);
+      const principal = await assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
       const result = await auditedAction("verify-payment", body, principal, async () => {
         assertConfirmed(body);
@@ -137,7 +199,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/purchase-domain") {
-      const principal = assertAuthorized(request);
+      const principal = await assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
       const result = await auditedAction("purchase-domain", body, principal, async () => {
         assertConfirmed(body);
@@ -209,7 +271,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/actions/push-domain") {
-      const principal = assertAuthorized(request);
+      const principal = await assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
       const result = await auditedAction("push-domain", body, principal, async () => {
         assertConfirmed(body);
@@ -278,6 +340,8 @@ function manifest() {
       health: "/health",
       readiness: "/ready",
       manifest: "/agent/manifest",
+      signup: "/auth/signup",
+      adminApiKeys: "/admin/api-keys",
       message: "/agent/message",
       actions: {
         createPayment: "/agent/actions/create-payment",
@@ -320,7 +384,8 @@ function manifest() {
     ],
     auth: {
       schemes: ["Authorization: Bearer <token>", "x-api-auth-token: <token>"],
-      userApiKeys: "Set OYIRA_USER_API_KEYS as customerId:token or customerId:token:keyId entries.",
+      signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
+      userApiKeys: "Users can self-issue keys via /auth/signup. Optional env keys can still be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access."
     },
     safety: [
@@ -331,14 +396,14 @@ function manifest() {
   };
 }
 
-function assertAuthorized(request: http.IncomingMessage): AuthPrincipal {
+async function assertAuthorized(request: http.IncomingMessage): Promise<AuthPrincipal> {
   const token = readAuthToken(request);
 
   if (config.auth.ownerToken && token && secureEqual(token, config.auth.ownerToken)) {
     return { role: "owner", keyId: "owner" };
   }
 
-  const matchedKey = config.auth.userApiKeys.find((entry) => token && secureEqual(token, entry.token));
+  const matchedKey = token ? await userApiKeys.authenticate(token) : null;
 
   if (matchedKey) {
     return {
@@ -348,11 +413,13 @@ function assertAuthorized(request: http.IncomingMessage): AuthPrincipal {
     };
   }
 
-  if (!config.auth.ownerToken && config.auth.userApiKeys.length === 0) {
-    return { role: "owner", keyId: "unauthenticated" };
-  }
-
   throw new HttpError(401, "Unauthorized.");
+}
+
+function assertOwner(principal: AuthPrincipal) {
+  if (principal.role !== "owner") {
+    throw new HttpError(403, "Owner token required.");
+  }
 }
 
 function readAuthToken(request: http.IncomingMessage) {
@@ -408,6 +475,12 @@ async function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
 function sendJson(response: http.ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(`${JSON.stringify(body, null, 2)}\n`);
+}
+
+function publicBaseUrl(request: http.IncomingMessage) {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  return `${proto || "https"}://${request.headers.host ?? "oyiradns.xyz"}`;
 }
 
 function assertConfirmed(body: Record<string, unknown>) {
@@ -571,12 +644,13 @@ function readyReport() {
     check("stores.quotes", Boolean(config.quotes.storePath), "Quote store path is configured."),
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
     check("stores.sessions", Boolean(config.sessions.storePath), "Session store path is configured."),
-    check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured.")
+    check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured."),
+    check("stores.userApiKeys", Boolean(config.auth.userApiKeyStorePath), "User API key store path is configured.")
   ];
   const warnings = [
-    config.auth.ownerToken || config.auth.userApiKeys.length > 0
+    config.auth.ownerToken || config.auth.userApiKeys.length > 0 || config.auth.publicSignupEnabled
       ? null
-      : "No API auth tokens are set; HTTP action endpoints are unauthenticated.",
+      : "No API auth tokens are set and public signup is disabled; HTTP endpoints cannot be used.",
     config.dynadot.env === "live" && !config.dynadot.allowLivePurchases
       ? "Dynadot live environment is selected, but live purchases are disabled."
       : null,

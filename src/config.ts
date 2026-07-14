@@ -55,6 +55,8 @@ export interface UserApiKey {
 export interface AuthConfig {
   ownerToken: string;
   userApiKeys: UserApiKey[];
+  userApiKeyStorePath: string;
+  publicSignupEnabled: boolean;
 }
 
 export interface QuoteConfig {
@@ -138,7 +140,9 @@ export function loadConfig(): ServiceConfig {
     port: Number(readEnv("PORT", "3000")),
     auth: {
       ownerToken: readEnv("API_AUTH_TOKEN"),
-      userApiKeys: parseUserApiKeys(readEnv("OYIRA_USER_API_KEYS"))
+      userApiKeys: parseUserApiKeys(readEnv("OYIRA_USER_API_KEYS")),
+      userApiKeyStorePath: readEnv("OYIRA_USER_API_KEY_STORE_PATH", "data/oyira-user-api-keys.json"),
+      publicSignupEnabled: readEnv("OYIRA_PUBLIC_SIGNUP_ENABLED", "true") === "true"
     },
     gemini: {
       apiKey: readFirstEnv(["GOOGLE_API_KEY", "GEMINI_API_KEY"]),

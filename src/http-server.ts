@@ -711,8 +711,16 @@ function manifest() {
     auth: {
       schemes: ["Authorization: Bearer <token>", "x-api-auth-token: <token>"],
       signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
-      userApiKeys: "Users can self-issue keys via /auth/signup. Optional env keys can still be set as customerId:token or customerId:token:keyId entries.",
-      ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access."
+      userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
+      ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
+      marketplace: "OKX.AI marketplace calls should use /x402/domain/purchase. No customer API key is required; x402 payment verification is the proof rail."
+    },
+    marketplace: {
+      mode: "a2mcp-x402",
+      endpoint: "/x402/domain/purchase",
+      requiresCustomerApiKey: false,
+      proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration.",
+      requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
     },
     safety: [
       "Quote before payment.",
@@ -1353,6 +1361,8 @@ function readyReport() {
     service: "oyira-http",
     agent: "oyira",
     dynadotEnv: config.dynadot.env,
+    marketplaceMode: "a2mcp-x402",
+    marketplaceRequiresCustomerApiKey: false,
     livePurchasesEnabled: config.dynadot.allowLivePurchases,
     domainPushesEnabled: config.dynadot.allowDomainPushes,
     dnsChangesEnabled: config.dynadot.allowDnsChanges,

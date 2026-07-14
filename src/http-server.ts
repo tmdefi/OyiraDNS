@@ -201,6 +201,8 @@ const server = http.createServer(async (request, response) => {
           domainName: prepared.record.domainName,
           years: prepared.record.years,
           quoteId: prepared.record.quoteId,
+          customerId: prepared.record.customerId,
+          x402Payer: prepared.record.x402Payer,
           ledgerRecordId: prepared.record.ledgerRecordId
         });
         return;
@@ -231,7 +233,8 @@ const server = http.createServer(async (request, response) => {
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "payment_settled",
         paymentTransaction: settlement.transaction,
-        customerId: settledCustomerId
+        customerId: settledCustomerId,
+        x402Payer: verifiedPaymentPayer
       });
 
       const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
@@ -247,6 +250,7 @@ const server = http.createServer(async (request, response) => {
       const ledgerRecord = await domainLedger.createRecord({
         domainName: quote.domainName,
         customerId: settledCustomerId,
+        x402Payer: verifiedPaymentPayer,
         years: quote.years,
         currency: quote.currency,
         paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
@@ -264,7 +268,8 @@ const server = http.createServer(async (request, response) => {
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "registered",
         ledgerRecordId: ledgerRecord.id,
-        customerId: settledCustomerId
+        customerId: settledCustomerId,
+        x402Payer: verifiedPaymentPayer
       });
       await auditLog.append({
         action: "x402-domain-purchase",
@@ -277,6 +282,7 @@ const server = http.createServer(async (request, response) => {
         result: {
           domainName: quote.domainName,
           quoteId: quote.id,
+          x402Payer: verifiedPaymentPayer,
           ledgerRecordId: ledgerRecord.id,
           paymentId: settlement.transaction
         }
@@ -296,8 +302,10 @@ const server = http.createServer(async (request, response) => {
           payment: {
             provider: "x402",
             network: settlement.requirements.network,
-            transaction: settlement.transaction
+            transaction: settlement.transaction,
+            x402Payer: verifiedPaymentPayer
           },
+          x402Payer: verifiedPaymentPayer,
           registration,
           ledgerRecord
         },
@@ -1368,6 +1376,10 @@ function auditResult(result: Record<string, unknown>) {
     quoteId: readOptionalString(quote, "id"),
     paymentId: readOptionalString(payment, "id") ?? readOptionalString(payment, "paymentId"),
     paymentStatus: readOptionalString(payment, "status"),
+    x402Payer:
+      readOptionalString(result, "x402Payer") ??
+      readOptionalString(payment, "x402Payer") ??
+      readOptionalString(ledgerRecord, "x402Payer"),
     domainName: readOptionalString(quote, "domainName") ?? readOptionalString(ledgerRecord, "domainName"),
     ledgerRecordId: readOptionalString(ledgerRecord, "id")
   });
@@ -1378,6 +1390,7 @@ function publicLedgerRecord(record: Awaited<ReturnType<DomainLedger["listRecords
     id: record.id,
     domainName: record.domainName,
     customerId: record.customerId,
+    x402Payer: record.x402Payer,
     years: record.years,
     currency: record.currency,
     paymentId: record.paymentId,

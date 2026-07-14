@@ -12,6 +12,7 @@ export interface X402PurchaseRecord {
   years: number;
   quoteId: string;
   customerId?: string;
+  x402Payer?: string;
   registrationContact?: RegistrationContact;
   status: "challenge_created" | "payment_settled" | "registered" | "failed";
   paymentTransaction?: string;

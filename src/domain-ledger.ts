@@ -8,6 +8,7 @@ export interface DomainLedgerRecord {
   id: string;
   domainName: string;
   customerId?: string;
+  x402Payer?: string;
   years: number;
   currency?: string;
   paymentId: string;
@@ -41,6 +42,7 @@ export class DomainLedger {
   async createRecord(input: {
     domainName: string;
     customerId?: string;
+    x402Payer?: string;
     years: number;
     currency?: string;
     paymentId: string;
@@ -54,6 +56,7 @@ export class DomainLedger {
       id: crypto.randomUUID(),
       domainName: this.normalizeDomain(input.domainName),
       customerId: input.customerId ? this.normalizeCustomerId(input.customerId) : undefined,
+      x402Payer: input.x402Payer ? this.normalizeCustomerId(input.x402Payer) : undefined,
       years: input.years,
       currency: input.currency,
       paymentId: input.paymentId,

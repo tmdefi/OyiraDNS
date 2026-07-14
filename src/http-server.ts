@@ -6,7 +6,7 @@ import { x402ResourceServer } from "@okxweb3/x402-core/server";
 import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AuditLog } from "./audit-log.js";
 import { loadConfig } from "./config.js";
-import { DynadotClient, type RegistrationContact } from "./dynadot.js";
+import { DynadotClient, type DnsRecordInput, type RegistrationContact } from "./dynadot.js";
 import { DomainLedger } from "./domain-ledger.js";
 import { DomainMonitorService } from "./domain-monitor.js";
 import { DomainQuoteService } from "./domain-quotes.js";
@@ -458,6 +458,49 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/agent/actions/configure-dns") {
+      const principal = await assertAuthorized(request);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const result = await auditedAction("configure-dns", body, principal, async () => {
+        assertConfirmed(body);
+        const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+        const customerId = readCustomerId(body, principal);
+        const skipLedgerCheck = principal.role === "owner" && body.skipLedgerCheck === true;
+
+        if (!skipLedgerCheck) {
+          const ledgerRecord = await domainLedger.getRecordByDomain(domainName, customerId);
+
+          if (!ledgerRecord) {
+            throw new HttpError(404, `No ledger record found for ${domainName}.`);
+          }
+        }
+
+        const records = readDnsRecords(body);
+        const dns = await dynadot.setDns2({
+          domainName,
+          records,
+          ttl: readNumber(body, "ttl", 300),
+          append: readBoolean(body, "append", false)
+        });
+
+        await updateActionSession(body, principal, {
+          lastDomainName: domainName,
+          lastToolName: "configure_dns"
+        });
+
+        return {
+          agent: "oyira",
+          action: "configure-dns",
+          reply: `${domainName} DNS setup has been submitted to Dynadot.`,
+          domainName,
+          records,
+          dns
+        };
+      });
+      sendJson(response, 200, result);
+      return;
+    }
+
     sendJson(response, 404, { error: "Not found." });
   } catch (error) {
     sendJson(response, error instanceof HttpError ? error.status : 500, {
@@ -492,7 +535,8 @@ function manifest() {
         createPayment: "/agent/actions/create-payment",
         verifyPayment: "/agent/actions/verify-payment",
         purchaseDomain: "/agent/actions/purchase-domain",
-        pushDomain: "/agent/actions/push-domain"
+        pushDomain: "/agent/actions/push-domain",
+        configureDns: "/agent/actions/configure-dns"
       }
     },
     autoExecutableTools: [
@@ -504,7 +548,7 @@ function manifest() {
       "list_domain_quotes",
       "get_domain_ledger_record"
     ],
-    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers"],
+    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers", "configure_dns"],
     gatedActions: [
       {
         endpoint: "/agent/actions/create-payment",
@@ -525,6 +569,11 @@ function manifest() {
         endpoint: "/agent/actions/push-domain",
         required: ["confirm", "domainName", "targetAccount or targetEmail"],
         optional: ["sessionId", "customerId", "message"]
+      },
+      {
+        endpoint: "/agent/actions/configure-dns",
+        required: ["confirm", "domainName", "records"],
+        optional: ["sessionId", "customerId", "ttl", "append", "skipLedgerCheck"]
       }
     ],
     auth: {
@@ -538,6 +587,7 @@ function manifest() {
       "Verify payment before registration.",
       "For x402 domain purchase, settle x402 payment before Dynadot registration.",
       "Require idempotencyKey for x402 purchase replay protection.",
+      "Require explicit confirmation and ledger ownership for DNS record changes.",
       "Require explicit confirmation for live purchase, payment, nameserver changes, and domain pushes."
     ]
   };
@@ -830,9 +880,67 @@ function readNumber(body: Record<string, unknown>, key: string, fallback: number
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function readBoolean(body: Record<string, unknown>, key: string, fallback: boolean) {
+  const value = body[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function readStringArray(body: Record<string, unknown>, key: string) {
   const value = body[key];
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())) : undefined;
+}
+
+function readDnsRecords(body: Record<string, unknown>): DnsRecordInput[] {
+  const value = body.records;
+
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new HttpError(400, "Missing required field: records.");
+  }
+
+  if (value.length > 119) {
+    throw new HttpError(400, "Too many DNS records. Dynadot supports 20 root records and 99 subdomain records.");
+  }
+
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new HttpError(400, `DNS record ${index} must be an object.`);
+    }
+
+    const record = entry as Record<string, unknown>;
+    const type = readRecordString(record, "type", index).toLowerCase() as DnsRecordInput["type"];
+    const name = readOptionalRecordString(record, "name");
+    const value = readRecordString(record, "value", index);
+    const priority = readOptionalRecordNumber(record, "priority");
+    const extra = readOptionalRecordString(record, "extra") ?? readOptionalRecordNumber(record, "extra");
+
+    return {
+      type,
+      name,
+      value,
+      priority,
+      extra
+    };
+  });
+}
+
+function readRecordString(record: Record<string, unknown>, key: string, index: number) {
+  const value = record[key];
+
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  throw new HttpError(400, `DNS record ${index} is missing ${key}.`);
+}
+
+function readOptionalRecordString(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalRecordNumber(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readRegistrationContact(body: Record<string, unknown>): RegistrationContact | undefined {
@@ -930,6 +1038,7 @@ function auditRequest(body: Record<string, unknown>, principal: AuthPrincipal) {
     paymentId: readOptionalString(body, "paymentId"),
     targetAccount: readOptionalString(body, "targetAccount"),
     targetEmail: readOptionalString(body, "targetEmail"),
+    dnsRecordCount: Array.isArray(body.records) ? body.records.length : undefined,
     confirm: body.confirm === true,
     hasRegistrationContact: Boolean(body.registrationContact)
   });
@@ -994,7 +1103,8 @@ function readyReport() {
     config.dynadot.env === "live" && !config.dynadot.allowLivePurchases
       ? "Dynadot live environment is selected, but live purchases are disabled."
       : null,
-    !config.dynadot.allowDomainPushes ? "Domain pushes are disabled." : null
+    !config.dynadot.allowDomainPushes ? "Domain pushes are disabled." : null,
+    !config.dynadot.allowDnsChanges ? "DNS changes are disabled." : null
   ].filter((warning): warning is string => Boolean(warning));
 
   return {
@@ -1004,6 +1114,7 @@ function readyReport() {
     dynadotEnv: config.dynadot.env,
     livePurchasesEnabled: config.dynadot.allowLivePurchases,
     domainPushesEnabled: config.dynadot.allowDomainPushes,
+    dnsChangesEnabled: config.dynadot.allowDnsChanges,
     checks,
     warnings
   };

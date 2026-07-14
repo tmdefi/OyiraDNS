@@ -22,6 +22,16 @@ export interface DomainPushInput {
   message?: string;
 }
 
+export type DnsRecordType = "a" | "aaaa" | "cname" | "txt" | "mx" | "forward" | "srv" | "stealth" | "email";
+
+export interface DnsRecordInput {
+  type: DnsRecordType;
+  name?: string;
+  value: string;
+  priority?: number;
+  extra?: string | number;
+}
+
 interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown>;
@@ -96,6 +106,64 @@ export class DynadotClient {
         nameServers: nameservers
       }
     });
+  }
+
+  setDns2(input: { domainName: string; records: DnsRecordInput[]; ttl?: number; append?: boolean }) {
+    if (!this.config.allowDnsChanges) {
+      throw new Error("DNS changes are disabled. Set ALLOW_DNS_CHANGES=true to enable DNS record updates.");
+    }
+
+    const query: Record<string, string | number | boolean | undefined> = {
+      domain: input.domainName.trim().toLowerCase(),
+      ttl: input.ttl,
+      add_dns_to_current_setting: input.append ? 1 : undefined
+    };
+    let rootIndex = 0;
+    let subdomainIndex = 0;
+
+    for (const record of input.records) {
+      const name = normalizeDnsName(record.name);
+      const type = normalizeDnsRecordType(record.type);
+      const value = record.value.trim();
+
+      if (!value) {
+        throw new Error("DNS record value cannot be empty.");
+      }
+
+      if (name === "@" || name === "") {
+        if (rootIndex >= 20) {
+          throw new Error("Dynadot set_dns2 supports at most 20 root records.");
+        }
+
+        query[`main_record_type${rootIndex}`] = type;
+        query[`main_record${rootIndex}`] = value;
+        const extra = dnsRecordExtra(record);
+        if (extra !== undefined) {
+          query[`main_recordx${rootIndex}`] = extra;
+        }
+        rootIndex += 1;
+        continue;
+      }
+
+      if (subdomainIndex >= 99) {
+        throw new Error("Dynadot set_dns2 supports at most 99 subdomain records.");
+      }
+
+      query[`subdomain${subdomainIndex}`] = name;
+      query[`sub_record_type${subdomainIndex}`] = type;
+      query[`sub_record${subdomainIndex}`] = value;
+      const extra = dnsRecordExtra(record);
+      if (extra !== undefined) {
+        query[`sub_recordx${subdomainIndex}`] = extra;
+      }
+      subdomainIndex += 1;
+    }
+
+    if (rootIndex === 0 && subdomainIndex === 0) {
+      throw new Error("At least one DNS record is required.");
+    }
+
+    return this.api3Request("set_dns2", query);
   }
 
   pushDomain(input: DomainPushInput) {
@@ -186,6 +254,11 @@ export class DynadotClient {
     return this.config.baseUrl.replace(/\/+$/, "");
   }
 
+  private api3BaseUrl() {
+    const baseUrl = this.baseUrl();
+    return `${baseUrl}/api3.json`;
+  }
+
   private assertConfigured(requireSignature: boolean) {
     if (!this.config.apiKey) {
       throw new Error(`Missing Dynadot ${this.config.env} API key.`);
@@ -235,6 +308,37 @@ export class DynadotClient {
     }
   }
 
+  private async api3Request(command: string, query: Record<string, string | number | boolean | undefined>) {
+    this.assertConfigured(false);
+
+    const params = new URLSearchParams();
+    params.set("key", this.config.apiKey);
+    params.set("command", command);
+
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") {
+        params.set(key, String(value));
+      }
+    }
+
+    const response = await fetch(`${this.api3BaseUrl()}?${params.toString()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json"
+      }
+    });
+    const text = await response.text();
+    const data = text ? this.parseResponse(text) : null;
+
+    if (!response.ok) {
+      throw new Error(`Dynadot API3 ${response.status} ${response.statusText}: ${text}`);
+    }
+
+    this.assertApi3SuccessfulResponse(data);
+
+    return data;
+  }
+
   private assertSuccessfulResponse(data: unknown) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       return;
@@ -250,6 +354,28 @@ export class DynadotClient {
 
     if (Number.isFinite(numericCode) && numericCode >= 400) {
       throw new Error(`Dynadot business error ${code}: ${JSON.stringify(data)}`);
+    }
+  }
+
+  private assertApi3SuccessfulResponse(data: unknown) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error(`Dynadot API3 returned an invalid response: ${JSON.stringify(data)}`);
+    }
+
+    const responseEntry = Object.values(data as Record<string, unknown>).find(
+      (entry) => entry && typeof entry === "object" && !Array.isArray(entry)
+    ) as Record<string, unknown> | undefined;
+
+    if (!responseEntry) {
+      throw new Error(`Dynadot API3 returned an invalid response: ${JSON.stringify(data)}`);
+    }
+
+    const status = String(responseEntry.Status ?? responseEntry.status ?? "").toLowerCase();
+    const responseCode = String(responseEntry.ResponseCode ?? responseEntry.SuccessCode ?? "");
+
+    if (status !== "success" && responseCode !== "0") {
+      const error = responseEntry.Error ?? responseEntry.error ?? JSON.stringify(data);
+      throw new Error(`Dynadot API3 business error: ${error}`);
     }
   }
 
@@ -287,4 +413,32 @@ export class DynadotClient {
   private delay(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+}
+
+function normalizeDnsName(name: string | undefined) {
+  const value = (name ?? "@").trim().toLowerCase();
+  return value === "." || value === "root" ? "@" : value;
+}
+
+function normalizeDnsRecordType(type: string) {
+  const normalized = type.trim().toLowerCase();
+  const allowed = new Set(["a", "aaaa", "cname", "txt", "mx", "forward", "srv", "stealth", "email"]);
+
+  if (!allowed.has(normalized)) {
+    throw new Error(`Unsupported DNS record type: ${type}.`);
+  }
+
+  return normalized;
+}
+
+function dnsRecordExtra(record: DnsRecordInput) {
+  if (record.extra !== undefined) {
+    return record.extra;
+  }
+
+  if (record.type.toLowerCase() === "mx" && record.priority !== undefined) {
+    return record.priority;
+  }
+
+  return undefined;
 }

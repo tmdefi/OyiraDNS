@@ -39,6 +39,9 @@ monitor unavailable domains, and help transfer purchased domains to customer Dyn
 Core operating rules:
 - Never register or push a domain unless the customer has explicitly asked for that action.
 - Always quote before payment, create payment from a stored quote, then verify payment before purchase.
+- Never mention a quote total, quote ID, payment request, invoice, or checkout unless a tool result or session context provides the real value.
+- If the customer asks to pay, buy, register, or checkout for a domain but no real quoteId is available, call quote_domain first instead of create_payment_from_quote.
+- If the local tool plan says quote_domain, your reply must say you will check/quote the domain next; do not say the domain is available or priced until the tool result exists.
 - Treat live Dynadot purchases and domain pushes as high-impact actions.
 - If a domain is unavailable, offer monitoring or variant search instead of implying it can be bought.
 - Keep answers short, concrete, and customer-facing.
@@ -91,15 +94,23 @@ export function decideDomainAgentNextAction(message: string): AgentDecision {
       });
     }
   } else if (intent === "payment") {
-    if (!quoteId) {
-      missing.push("quoteId");
-    }
+    if (!quoteId && domainName) {
+      nextSteps.push({
+        toolName: "quote_domain",
+        reason: "Payment requires a stored quote first, so quote the requested domain before creating payment.",
+        args: { domainName, years }
+      });
+    } else {
+      if (!quoteId) {
+        missing.push("quoteId");
+      }
 
-    nextSteps.push({
-      toolName: "create_payment_from_quote",
-      reason: "Payment should be created from a stored quote total.",
-      args: compactObject({ quoteId, recipient: "OKX_WALLET_ADDRESS", description: domainName ? `Register ${domainName}` : undefined })
-    });
+      nextSteps.push({
+        toolName: "create_payment_from_quote",
+        reason: "Payment should be created from a stored quote total.",
+        args: compactObject({ quoteId, recipient: "OKX_WALLET_ADDRESS", description: domainName ? `Register ${domainName}` : undefined })
+      });
+    }
   } else if (intent === "purchase") {
     if (!domainName) {
       missing.push("domainName");
@@ -205,6 +216,7 @@ export async function decideDomainAgentNextActionWithGemini(
 
 function inferIntent(text: string): AgentIntent {
   const negatesPurchase = /\b(?:do not|don't|dont|no need to|without)\s+(?:buy|purchase|register|secure|grab)\b/.test(text);
+  const negatesPayment = /\b(?:do not|don't|dont|no need to|without)\b[^.?!]{0,80}\b(?:pay|create payment|payment|checkout|invoice)\b/.test(text);
 
   if (/\b(monitor|watch|alert|notify|available again)\b/.test(text)) {
     return "monitor";
@@ -214,7 +226,7 @@ function inferIntent(text: string): AgentIntent {
     return "transfer";
   }
 
-  if (/\b(pay|payment|checkout|invoice)\b/.test(text)) {
+  if (!negatesPayment && /\b(pay|payment|checkout|invoice)\b/.test(text)) {
     return "payment";
   }
 
@@ -303,6 +315,7 @@ ${JSON.stringify(
 )}
 
 Write one concise customer-facing reply. Do not invent tool results. If fields are missing, ask only for the missing fields. If the local tool plan has a next tool, say what you will check or prepare next without exposing internal JSON.
+Never write placeholders such as "[Insert Quote Details]". Never say a payment can be created unless the local tool plan includes create_payment_from_quote with a real quoteId.
 `.trim();
 }
 

@@ -278,6 +278,11 @@ function formatReply(decision: AgentDecision, execution: OyiraToolExecution | nu
   }
 
   if (execution.error) {
+    if (execution.toolName === "quote_domain" && execution.error.startsWith("Domain ") && execution.error.endsWith(" is not available.")) {
+      const domainName = execution.error.replace(/^Domain /, "").replace(/ is not available\.$/, "");
+      return `${domainName} does not look available right now. I can search variants or monitor it for you.`;
+    }
+
     return `I tried to run ${execution.toolName}, but it failed: ${execution.error}`;
   }
 

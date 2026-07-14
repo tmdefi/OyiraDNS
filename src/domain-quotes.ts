@@ -26,6 +26,13 @@ export interface DomainQuote {
   updatedAt: string;
 }
 
+export class DomainUnavailableError extends Error {
+  constructor(readonly domainName: string) {
+    super(`Domain ${domainName} is not available.`);
+    this.name = "DomainUnavailableError";
+  }
+}
+
 interface StoreShape {
   quotes: DomainQuote[];
 }
@@ -56,6 +63,10 @@ export class DomainQuoteService {
     const availability = await this.dynadot.searchDomain(domainName, { showPrice: true, currency });
     const available = this.extractAvailability(availability);
     const tld = domainName.includes(".") ? domainName.split(".").at(-1) ?? domainName : domainName;
+    if (available === false) {
+      throw new DomainUnavailableError(domainName);
+    }
+
     const dynadotCost = this.extractRegistrationPrice(availability, years) ?? "";
     let tldPrice: unknown = null;
     let pricingWarning: string | undefined;

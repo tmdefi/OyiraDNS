@@ -505,6 +505,48 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/agent/actions/set-nameservers") {
+      const principal = await assertAuthorized(request);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const result = await auditedAction("set-nameservers", body, principal, async () => {
+        assertConfirmed(body);
+        if (!config.dynadot.allowNameserverChanges) {
+          throw new HttpError(503, "Nameserver changes are disabled. Set ALLOW_NAMESERVER_CHANGES=true to enable nameserver updates.");
+        }
+
+        const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+        const customerId = readCustomerId(body, principal);
+        const skipLedgerCheck = principal.role === "owner" && body.skipLedgerCheck === true;
+
+        if (!skipLedgerCheck) {
+          const ledgerRecord = await domainLedger.getRecordByDomain(domainName, customerId);
+
+          if (!ledgerRecord) {
+            throw new HttpError(404, `No ledger record found for ${domainName}.`);
+          }
+        }
+
+        const nameservers = readNameservers(body);
+        const dynadotNameservers = await dynadot.setNameservers(domainName, nameservers);
+
+        await updateActionSession(body, principal, {
+          lastDomainName: domainName,
+          lastToolName: "set_nameservers"
+        });
+
+        return {
+          agent: "oyira",
+          action: "set-nameservers",
+          reply: `${domainName} nameserver setup has been submitted to Dynadot.`,
+          domainName,
+          nameservers,
+          dynadotNameservers
+        };
+      });
+      sendJson(response, 200, result);
+      return;
+    }
+
     sendJson(response, 404, { error: "Not found." });
   } catch (error) {
     sendJson(response, error instanceof HttpError ? error.status : 500, {
@@ -540,7 +582,8 @@ function manifest() {
         verifyPayment: "/agent/actions/verify-payment",
         purchaseDomain: "/agent/actions/purchase-domain",
         pushDomain: "/agent/actions/push-domain",
-        configureDns: "/agent/actions/configure-dns"
+        configureDns: "/agent/actions/configure-dns",
+        setNameservers: "/agent/actions/set-nameservers"
       }
     },
     autoExecutableTools: [
@@ -578,6 +621,11 @@ function manifest() {
         endpoint: "/agent/actions/configure-dns",
         required: ["confirm", "domainName", "records"],
         optional: ["sessionId", "customerId", "ttl", "append", "skipLedgerCheck"]
+      },
+      {
+        endpoint: "/agent/actions/set-nameservers",
+        required: ["confirm", "domainName", "nameservers"],
+        optional: ["sessionId", "customerId", "skipLedgerCheck"]
       }
     ],
     auth: {
@@ -592,6 +640,7 @@ function manifest() {
       "For x402 domain purchase, settle x402 payment before Dynadot registration.",
       "Require idempotencyKey for x402 purchase replay protection.",
       "Require explicit confirmation and ledger ownership for DNS record changes.",
+      "Require explicit confirmation and ledger ownership for nameserver changes.",
       "Require explicit confirmation for live purchase, payment, nameserver changes, and domain pushes."
     ]
   };
@@ -894,6 +943,42 @@ function readStringArray(body: Record<string, unknown>, key: string) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())) : undefined;
 }
 
+function readNameservers(body: Record<string, unknown>) {
+  const nameservers = readStringArray(body, "nameservers")?.map((entry) => entry.trim().toLowerCase().replace(/\.$/, ""));
+
+  if (!nameservers || nameservers.length < 2) {
+    throw new HttpError(400, "Provide at least two nameservers.");
+  }
+
+  if (nameservers.length > 13) {
+    throw new HttpError(400, "Provide no more than 13 nameservers.");
+  }
+
+  const uniqueNameservers = Array.from(new Set(nameservers));
+
+  if (uniqueNameservers.length !== nameservers.length) {
+    throw new HttpError(400, "Nameservers must be unique.");
+  }
+
+  for (const nameserver of uniqueNameservers) {
+    if (!isValidNameserver(nameserver)) {
+      throw new HttpError(400, `Invalid nameserver: ${nameserver}.`);
+    }
+  }
+
+  return uniqueNameservers;
+}
+
+function isValidNameserver(nameserver: string) {
+  if (nameserver.length > 253 || nameserver.includes("/") || nameserver.includes(":")) {
+    return false;
+  }
+
+  return nameserver
+    .split(".")
+    .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
 function readDnsRecords(body: Record<string, unknown>): DnsRecordInput[] {
   const value = body.records;
 
@@ -1043,6 +1128,7 @@ function auditRequest(body: Record<string, unknown>, principal: AuthPrincipal) {
     targetAccount: readOptionalString(body, "targetAccount"),
     targetEmail: readOptionalString(body, "targetEmail"),
     dnsRecordCount: Array.isArray(body.records) ? body.records.length : undefined,
+    nameserverCount: Array.isArray(body.nameservers) ? body.nameservers.length : undefined,
     confirm: body.confirm === true,
     hasRegistrationContact: Boolean(body.registrationContact)
   });
@@ -1108,7 +1194,8 @@ function readyReport() {
       ? "Dynadot live environment is selected, but live purchases are disabled."
       : null,
     !config.dynadot.allowDomainPushes ? "Domain pushes are disabled." : null,
-    !config.dynadot.allowDnsChanges ? "DNS changes are disabled." : null
+    !config.dynadot.allowDnsChanges ? "DNS changes are disabled." : null,
+    !config.dynadot.allowNameserverChanges ? "Nameserver changes are disabled." : null
   ].filter((warning): warning is string => Boolean(warning));
 
   return {
@@ -1119,6 +1206,7 @@ function readyReport() {
     livePurchasesEnabled: config.dynadot.allowLivePurchases,
     domainPushesEnabled: config.dynadot.allowDomainPushes,
     dnsChangesEnabled: config.dynadot.allowDnsChanges,
+    nameserverChangesEnabled: config.dynadot.allowNameserverChanges,
     checks,
     warnings
   };

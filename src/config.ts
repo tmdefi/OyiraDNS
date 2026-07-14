@@ -11,6 +11,7 @@ export interface DynadotConfig {
   allowLivePurchases: boolean;
   allowDomainPushes: boolean;
   allowDnsChanges: boolean;
+  allowNameserverChanges: boolean;
 }
 
 export interface OkxPaymentConfig {
@@ -168,7 +169,8 @@ export function loadConfig(): ServiceConfig {
       apiSecret: readEnv(`${prefix}_API_SECRET`),
       allowLivePurchases: readEnv("ALLOW_LIVE_PURCHASES", "false") === "true",
       allowDomainPushes: readEnv("ALLOW_DOMAIN_PUSHES", "false") === "true",
-      allowDnsChanges: readEnv("ALLOW_DNS_CHANGES", "false") === "true"
+      allowDnsChanges: readEnv("ALLOW_DNS_CHANGES", "false") === "true",
+      allowNameserverChanges: readEnv("ALLOW_NAMESERVER_CHANGES", "false") === "true"
     },
     okx: {
       baseUrl: readEnv("OKX_BASE_URL", "https://www.okx.com"),

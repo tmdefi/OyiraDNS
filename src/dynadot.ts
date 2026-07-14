@@ -99,6 +99,10 @@ export class DynadotClient {
   }
 
   setNameservers(domainName: string, nameservers: string[]) {
+    if (!this.config.allowNameserverChanges) {
+      throw new Error("Nameserver changes are disabled. Set ALLOW_NAMESERVER_CHANGES=true to enable nameserver updates.");
+    }
+
     return this.request("PUT", this.domainPath(domainName, "set_nameserver"), {
       requireSignature: true,
       body: {

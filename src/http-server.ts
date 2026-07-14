@@ -463,6 +463,10 @@ const server = http.createServer(async (request, response) => {
       const body = await readJsonBody<Record<string, unknown>>(request);
       const result = await auditedAction("configure-dns", body, principal, async () => {
         assertConfirmed(body);
+        if (!config.dynadot.allowDnsChanges) {
+          throw new HttpError(503, "DNS changes are disabled. Set ALLOW_DNS_CHANGES=true to enable DNS record updates.");
+        }
+
         const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
         const customerId = readCustomerId(body, principal);
         const skipLedgerCheck = principal.role === "owner" && body.skipLedgerCheck === true;

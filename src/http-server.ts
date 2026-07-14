@@ -654,6 +654,10 @@ function assertX402Configured() {
   if (!config.okx.apiKey || !config.okx.apiSecret || !config.okx.apiPassphrase) {
     throw new HttpError(503, "OKX facilitator credentials are required before x402 purchases can run.");
   }
+
+  if (config.dynadot.env === "live" && !config.dynadot.allowLivePurchases) {
+    throw new HttpError(503, "Live Dynadot purchases are disabled, so x402 domain purchase payment is not being accepted.");
+  }
 }
 
 async function getX402PurchaseServer() {
@@ -738,24 +742,25 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
       throw new HttpError(409, `Stored quote ${existing.quoteId} was not found for idempotency key ${idempotencyKey}.`);
     }
 
-    return { record: existing, quote };
+    return { record: existing, quote: await domainQuotes.assertQuoteUsable(quote.id, quote) };
   }
 
   const quote = await domainQuotes.createQuote({
     domainName,
     years
   });
+  const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
   const record = await x402Purchases.create({
     idempotencyKey,
     requestHash,
-    domainName: quote.domainName,
-    years: quote.years,
-    quoteId: quote.id,
+    domainName: usableQuote.domainName,
+    years: usableQuote.years,
+    quoteId: usableQuote.id,
     customerId,
     registrationContact
   });
 
-  return { record, quote };
+  return { record, quote: usableQuote };
 }
 
 function x402RequestContext(

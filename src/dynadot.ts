@@ -30,6 +30,7 @@ interface RequestOptions {
 
 export class DynadotClient {
   private readonly config: DynadotConfig;
+  private readonly maxTransientAttempts = 3;
 
   constructor(config: DynadotConfig) {
     this.config = config;
@@ -120,38 +121,57 @@ export class DynadotClient {
   async request(method: HttpMethod, path: string, options: RequestOptions = {}) {
     this.assertConfigured(options.requireSignature ?? false);
 
+    const maxAttempts = method === "GET" ? this.maxTransientAttempts : 1;
     const queryString = this.toQueryString(options.query);
     const fullPathAndQuery = `${path}${queryString}`;
-    const requestId = crypto.randomUUID();
     const requestBody = options.body ? JSON.stringify(this.compactObject(options.body)) : "";
 
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      Authorization: `Bearer ${this.config.apiKey}`,
-      "Content-Type": "application/json",
-      "X-Request-ID": requestId
-    };
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const requestId = crypto.randomUUID();
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+        "Content-Type": "application/json",
+        "X-Request-ID": requestId
+      };
 
-    if (this.config.apiSecret) {
-      headers["X-Signature"] = this.createSignature(fullPathAndQuery, requestId, requestBody);
+      if (this.config.apiSecret) {
+        headers["X-Signature"] = this.createSignature(fullPathAndQuery, requestId, requestBody);
+      }
+
+      try {
+        const response = await fetch(`${this.baseUrl()}${fullPathAndQuery}`, {
+          method,
+          headers,
+          body: requestBody || undefined
+        });
+
+        const text = await response.text();
+        const data = text ? this.parseResponse(text) : null;
+
+        if (!response.ok) {
+          if (attempt < maxAttempts && this.isTransientDynadotFailure(response.status, text)) {
+            await this.delay(this.retryDelayMs(attempt));
+            continue;
+          }
+
+          throw new Error(`Dynadot ${response.status} ${response.statusText}: ${text}`);
+        }
+
+        this.assertSuccessfulResponse(data);
+
+        return data;
+      } catch (error) {
+        if (attempt < maxAttempts && this.isTransientRequestError(error)) {
+          await this.delay(this.retryDelayMs(attempt));
+          continue;
+        }
+
+        throw error;
+      }
     }
 
-    const response = await fetch(`${this.baseUrl()}${fullPathAndQuery}`, {
-      method,
-      headers,
-      body: requestBody || undefined
-    });
-
-    const text = await response.text();
-    const data = text ? this.parseResponse(text) : null;
-
-    if (!response.ok) {
-      throw new Error(`Dynadot ${response.status} ${response.statusText}: ${text}`);
-    }
-
-    this.assertSuccessfulResponse(data);
-
-    return data;
+    throw new Error("Dynadot request failed after retry attempts.");
   }
 
   private domainPath(identifier: string, action: string) {
@@ -231,5 +251,40 @@ export class DynadotClient {
     if (Number.isFinite(numericCode) && numericCode >= 400) {
       throw new Error(`Dynadot business error ${code}: ${JSON.stringify(data)}`);
     }
+  }
+
+  private isTransientDynadotFailure(status: number, text: string) {
+    const normalizedText = text.toLowerCase();
+    return (
+      [502, 503, 504].includes(status) ||
+      (status === 500 && normalizedText.includes("registry connection busy")) ||
+      normalizedText.includes("registry connection busy")
+    );
+  }
+
+  private isTransientRequestError(error: unknown) {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("registry connection busy") ||
+      message.includes("dynadot business error 502") ||
+      message.includes("dynadot business error 503") ||
+      message.includes("dynadot business error 504") ||
+      message.includes("fetch failed") ||
+      message.includes("econnreset") ||
+      message.includes("etimedout") ||
+      message.includes("network")
+    );
+  }
+
+  private retryDelayMs(attempt: number) {
+    return 400 * 2 ** (attempt - 1);
+  }
+
+  private delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

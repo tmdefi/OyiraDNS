@@ -384,7 +384,27 @@ function formatQuoteResult(result: unknown) {
     return "I could not find a quote in that result.";
   }
 
-  return `Quote ready for ${domainName ?? "the domain"}: ${totalDue ?? "amount pending"} ${paymentSymbol ?? ""}. Quote ID: ${quoteId}. It expires at ${expiresAt ?? "the configured expiry time"}.`;
+  return `Quote ready for ${domainName ?? "the domain"}: ${totalDue ?? "amount pending"} ${paymentSymbol ?? ""}. Quote ID: ${quoteId}. It ${formatQuoteExpiry(expiresAt)}.`;
+}
+
+function formatQuoteExpiry(expiresAt?: string) {
+  if (!expiresAt) {
+    return "expires at the configured expiry time";
+  }
+
+  const expiryTime = new Date(expiresAt).getTime();
+
+  if (!Number.isFinite(expiryTime)) {
+    return `expires at ${expiresAt}`;
+  }
+
+  const minutesRemaining = Math.max(0, Math.ceil((expiryTime - Date.now()) / 60000));
+
+  if (minutesRemaining === 0) {
+    return `has expired at ${expiresAt}`;
+  }
+
+  return `expires in ${minutesRemaining} minute${minutesRemaining === 1 ? "" : "s"} at ${expiresAt}`;
 }
 
 function formatMonitorResult(result: unknown) {

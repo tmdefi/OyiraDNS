@@ -33,10 +33,14 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 ## HTTP Runtime
 
 - Start with `npm run agent:http`.
+- Production base URL: `https://asp.oyiradns.xyz`.
 - Health endpoint: `GET /health`.
 - Readiness endpoint: `GET /ready`.
 - Manifest endpoint: `GET /agent/manifest`.
 - Message endpoint: `POST /agent/message`.
+- Claude/MCP wrapper URL: `https://asp.oyiradns.xyz/agent/message`.
+- OKX.AI x402 purchase URL: `https://asp.oyiradns.xyz/x402/domain/purchase`.
+- OKX.AI manifest URL: `https://asp.oyiradns.xyz/agent/manifest`.
 - Gated payment endpoint: `POST /agent/actions/create-payment`.
 - Gated payment verification endpoint: `POST /agent/actions/verify-payment`.
 - Gated purchase endpoint: `POST /agent/actions/purchase-domain`.

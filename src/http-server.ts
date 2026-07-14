@@ -888,7 +888,7 @@ function sendInstructions(response: http.ServerResponse, instructions: { status:
 function publicBaseUrl(request: http.IncomingMessage) {
   const forwardedProto = request.headers["x-forwarded-proto"];
   const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
-  return `${proto || "https"}://${request.headers.host ?? "oyiradns.xyz"}`;
+  return `${proto || "https"}://${request.headers.host ?? "asp.oyiradns.xyz"}`;
 }
 
 function assertX402Configured() {

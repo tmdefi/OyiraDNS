@@ -204,6 +204,8 @@ export async function decideDomainAgentNextActionWithGemini(
 }
 
 function inferIntent(text: string): AgentIntent {
+  const negatesPurchase = /\b(?:do not|don't|dont|no need to|without)\s+(?:buy|purchase|register|secure|grab)\b/.test(text);
+
   if (/\b(monitor|watch|alert|notify|available again)\b/.test(text)) {
     return "monitor";
   }
@@ -216,7 +218,7 @@ function inferIntent(text: string): AgentIntent {
     return "payment";
   }
 
-  if (/\b(buy|purchase|register|secure it|grab it)\b/.test(text)) {
+  if (!negatesPurchase && /\b(buy|purchase|register|secure it|grab it)\b/.test(text)) {
     return "purchase";
   }
 

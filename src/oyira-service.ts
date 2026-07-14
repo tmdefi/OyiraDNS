@@ -274,7 +274,7 @@ function formatReply(decision: AgentDecision, execution: OyiraToolExecution | nu
   }
 
   if (execution.requiresConfirmation) {
-    return `${decision.reply} This step needs confirmation before I run it.`;
+    return formatConfirmationRequired(decision, execution);
   }
 
   if (execution.error) {
@@ -317,6 +317,32 @@ function formatSearchResult(result: unknown, decision: AgentDecision) {
   }
 
   return `I checked ${domainName}, but the availability response was unclear. I can try variants or create a monitored watch.`;
+}
+
+function formatConfirmationRequired(decision: AgentDecision, execution: OyiraToolExecution) {
+  const toolName = execution.toolName;
+  const missing = decision.missing.length > 0 ? ` I still need ${decision.missing.join(", ")}.` : "";
+
+  switch (toolName) {
+    case "create_payment_from_quote": {
+      const quoteId = readKnownString(decision.nextSteps[0]?.args ?? {}, "quoteId");
+      return `I can create the payment request${quoteId ? ` for quote ${quoteId}` : ""}, but I need explicit confirmation first.${missing}`;
+    }
+    case "verify_payment": {
+      const paymentId = readKnownString(decision.nextSteps[0]?.args ?? {}, "paymentId");
+      return `I can verify the payment${paymentId ? ` ${paymentId}` : ""}, but I need explicit confirmation first.${missing}`;
+    }
+    case "purchase_domain": {
+      const domainName = readKnownString(decision.nextSteps[0]?.args ?? {}, "domainName");
+      return `I can register ${domainName ?? "the domain"} after payment and contact details are verified, but I need explicit confirmation first.${missing}`;
+    }
+    case "push_domain": {
+      const domainName = readKnownString(decision.nextSteps[0]?.args ?? {}, "domainName");
+      return `I can push ${domainName ?? "the domain"} to the target Dynadot account, but I need explicit confirmation first.${missing}`;
+    }
+    default:
+      return `That step needs explicit confirmation before I run it.${missing}`;
+  }
 }
 
 function formatVariantResult(result: unknown) {

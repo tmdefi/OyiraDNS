@@ -131,6 +131,45 @@ export class Database {
       create index if not exists oyira_audit_log_action_idx on oyira_audit_log (action);
       create index if not exists oyira_audit_log_status_idx on oyira_audit_log (status);
       create index if not exists oyira_audit_log_created_at_idx on oyira_audit_log (created_at);
+
+      create table if not exists oyira_user_api_keys (
+        id text primary key,
+        customer_id text not null,
+        key_id text not null,
+        status text not null,
+        token_hash text not null,
+        token_prefix text not null,
+        record jsonb not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null
+      );
+
+      create unique index if not exists oyira_user_api_keys_key_id_idx on oyira_user_api_keys (key_id);
+      create index if not exists oyira_user_api_keys_customer_id_idx on oyira_user_api_keys (customer_id);
+      create index if not exists oyira_user_api_keys_status_idx on oyira_user_api_keys (status);
+      create index if not exists oyira_user_api_keys_token_hash_idx on oyira_user_api_keys (token_hash);
+
+      create table if not exists oyira_sessions (
+        id text primary key,
+        customer_id text,
+        record jsonb not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null
+      );
+
+      create index if not exists oyira_sessions_customer_id_idx on oyira_sessions (customer_id);
+
+      create table if not exists oyira_domain_monitors (
+        domain_name text not null,
+        customer_id text not null default '',
+        record jsonb not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        primary key (domain_name, customer_id)
+      );
+
+      create index if not exists oyira_domain_monitors_domain_name_idx on oyira_domain_monitors (domain_name);
+      create index if not exists oyira_domain_monitors_customer_id_idx on oyira_domain_monitors (customer_id);
     `);
   }
 }

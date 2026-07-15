@@ -25,6 +25,9 @@ When a database URL is present, Oyira automatically creates these tables on firs
 - `oyira_x402_purchases`
 - `oyira_domain_ledger`
 - `oyira_audit_log`
+- `oyira_user_api_keys`
+- `oyira_sessions`
+- `oyira_domain_monitors`
 
 Check `GET /ready`. It should show:
 

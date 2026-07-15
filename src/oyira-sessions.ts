@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SessionConfig } from "./config.js";
+import type { Database } from "./database.js";
 
 export interface OyiraSessionMessage {
   role: "customer" | "oyira";
@@ -25,7 +26,10 @@ interface StoreShape {
 }
 
 export class OyiraSessionStore {
-  constructor(private readonly config: SessionConfig) {}
+  constructor(
+    private readonly config: SessionConfig,
+    private readonly database?: Database
+  ) {}
 
   async getOrCreateSession(input: { sessionId?: string; customerId?: string }) {
     const store = await this.readStore();
@@ -84,6 +88,13 @@ export class OyiraSessionStore {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: OyiraSession }>(
+        "select record from oyira_sessions order by created_at asc"
+      );
+      return { sessions: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.storePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -101,6 +112,21 @@ export class OyiraSessionStore {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      for (const session of store.sessions) {
+        await this.database.query(
+          `insert into oyira_sessions (id, customer_id, record, created_at, updated_at)
+           values ($1, $2, $3::jsonb, $4, $5)
+           on conflict (id) do update set
+             customer_id = excluded.customer_id,
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [session.id, session.customerId ?? null, JSON.stringify(session), session.createdAt, session.updatedAt]
+        );
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.storePath), { recursive: true });
     await writeFile(this.config.storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

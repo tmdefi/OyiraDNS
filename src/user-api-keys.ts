@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AuthConfig, UserApiKey } from "./config.js";
+import type { Database } from "./database.js";
 
 export interface StoredUserApiKey {
   id: string;
@@ -21,7 +22,10 @@ interface StoreShape {
 }
 
 export class UserApiKeyStore {
-  constructor(private readonly config: AuthConfig) {}
+  constructor(
+    private readonly config: AuthConfig,
+    private readonly database?: Database
+  ) {}
 
   async createKey(input: { customerId?: string; keyId?: string; label?: string } = {}) {
     const customerId = normalizeId(input.customerId) || `customer_${crypto.randomUUID()}`;
@@ -119,6 +123,13 @@ export class UserApiKeyStore {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: StoredUserApiKey }>(
+        "select record from oyira_user_api_keys order by created_at asc"
+      );
+      return { keys: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.userApiKeyStorePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -133,6 +144,36 @@ export class UserApiKeyStore {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      for (const key of store.keys) {
+        await this.database.query(
+          `insert into oyira_user_api_keys
+             (id, customer_id, key_id, status, token_hash, token_prefix, record, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+           on conflict (id) do update set
+             customer_id = excluded.customer_id,
+             key_id = excluded.key_id,
+             status = excluded.status,
+             token_hash = excluded.token_hash,
+             token_prefix = excluded.token_prefix,
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [
+            key.id,
+            key.customerId,
+            key.keyId,
+            key.status,
+            key.tokenHash,
+            key.tokenPrefix,
+            JSON.stringify(key),
+            key.createdAt,
+            key.revokedAt ?? key.lastUsedAt ?? key.createdAt
+          ]
+        );
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.userApiKeyStorePath), { recursive: true });
     await writeFile(this.config.userApiKeyStorePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

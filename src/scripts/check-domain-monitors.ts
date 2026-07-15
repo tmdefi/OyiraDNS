@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { Database } from "../database.js";
 import { DynadotClient } from "../dynadot.js";
 import { DomainMonitorService } from "../domain-monitor.js";
 
@@ -58,8 +59,9 @@ function parseArgs(args: string[]): CliOptions {
 
 const config = loadConfig();
 const options = parseArgs(process.argv.slice(2));
+const database = new Database(config.database);
 const dynadot = new DynadotClient(config.dynadot);
-const domainMonitor = new DomainMonitorService(config.monitoring, dynadot);
+const domainMonitor = new DomainMonitorService(config.monitoring, dynadot, database);
 
 let result: unknown;
 

@@ -19,7 +19,7 @@ const server = new McpServer({
 const dynadot = new DynadotClient(config.dynadot);
 const okx = new OkxPaymentClient(config.okx);
 const database = new Database(config.database);
-const domainMonitor = new DomainMonitorService(config.monitoring, dynadot);
+const domainMonitor = new DomainMonitorService(config.monitoring, dynadot, database);
 const domainLedger = new DomainLedger(config.ledger, database);
 const domainQuotes = new DomainQuoteService(config.quotes, dynadot, okx, database);
 

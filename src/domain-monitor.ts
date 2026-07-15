@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MonitoringConfig } from "./config.js";
+import type { Database } from "./database.js";
 import type { DynadotClient } from "./dynadot.js";
 
 type Availability = "Yes" | "No" | "Unknown";
@@ -32,7 +33,8 @@ interface StoreShape {
 export class DomainMonitorService {
   constructor(
     private readonly config: MonitoringConfig,
-    private readonly dynadot: DynadotClient
+    private readonly dynadot: DynadotClient,
+    private readonly database?: Database
   ) {}
 
   async addMonitor(input: { domainName: string; alertWhenAvailable?: boolean; customerId?: string }) {
@@ -182,6 +184,13 @@ export class DomainMonitorService {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: DomainMonitor }>(
+        "select record from oyira_domain_monitors order by created_at asc"
+      );
+      return { monitors: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.storePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -198,6 +207,35 @@ export class DomainMonitorService {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      const seen = new Set<string>();
+      for (const monitor of store.monitors) {
+        const customerId = monitor.customerId ?? "";
+        seen.add(`${monitor.domainName}\u0000${customerId}`);
+        await this.database.query(
+          `insert into oyira_domain_monitors (domain_name, customer_id, record, created_at, updated_at)
+           values ($1, $2, $3::jsonb, $4, $5)
+           on conflict (domain_name, customer_id) do update set
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [monitor.domainName, customerId, JSON.stringify(monitor), monitor.createdAt, monitor.updatedAt]
+        );
+      }
+
+      const existing = await this.database.query<{ domain_name: string; customer_id: string }>(
+        "select domain_name, customer_id from oyira_domain_monitors"
+      );
+      for (const row of existing.rows) {
+        if (!seen.has(`${row.domain_name}\u0000${row.customer_id}`)) {
+          await this.database.query("delete from oyira_domain_monitors where domain_name = $1 and customer_id = $2", [
+            row.domain_name,
+            row.customer_id
+          ]);
+        }
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.storePath), { recursive: true });
     await writeFile(this.config.storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

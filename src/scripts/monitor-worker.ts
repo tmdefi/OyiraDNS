@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { Database } from "../database.js";
 import { DynadotClient } from "../dynadot.js";
 import { DomainMonitorService } from "../domain-monitor.js";
 
@@ -7,8 +8,9 @@ function sleep(ms: number) {
 }
 
 const config = loadConfig();
+const database = new Database(config.database);
 const dynadot = new DynadotClient(config.dynadot);
-const domainMonitor = new DomainMonitorService(config.monitoring, dynadot);
+const domainMonitor = new DomainMonitorService(config.monitoring, dynadot, database);
 const intervalMs = Math.max(config.monitoring.intervalSeconds, 10) * 1000;
 
 console.error(`Domain monitor worker started. Interval: ${intervalMs / 1000}s`);

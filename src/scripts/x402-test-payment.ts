@@ -55,7 +55,17 @@ const responseText = await paidResponse.text();
 console.log(`Paid response status: ${paidResponse.status}`);
 
 if (!paidResponse.ok) {
-  throw new Error(responseText);
+  console.log(
+    JSON.stringify(
+      {
+        responseHeaders: paymentHeadersFrom(paidResponse.headers),
+        responseBody: responseText
+      },
+      null,
+      2
+    )
+  );
+  throw new Error(`x402 paid retry failed with HTTP ${paidResponse.status}.`);
 }
 
 const settlement = client.getPaymentSettleResponse((name) => paidResponse.headers.get(name));
@@ -69,3 +79,15 @@ console.log(
     2
   )
 );
+
+function paymentHeadersFrom(headers: Headers) {
+  const entries: Record<string, string> = {};
+
+  for (const [key, value] of headers) {
+    if (key.toLowerCase().includes("payment") || key.toLowerCase().includes("www")) {
+      entries[key] = value;
+    }
+  }
+
+  return entries;
+}

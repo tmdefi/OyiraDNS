@@ -18,6 +18,15 @@ export class Database {
     return Boolean(this.pool);
   }
 
+  async ping() {
+    if (!this.pool) {
+      return false;
+    }
+
+    await this.query("select 1");
+    return true;
+  }
+
   async query<T extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []) {
     if (!this.pool) {
       throw new Error("Database is not configured.");
@@ -125,4 +134,3 @@ export class Database {
     `);
   }
 }
-

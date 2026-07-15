@@ -9,7 +9,15 @@ SUPABASE_DB_URL=postgresql://...
 DATABASE_SSL=true
 ```
 
-`SUPABASE_DB_URL` can be the Supabase pooled Postgres connection string. `DATABASE_URL` or `POSTGRES_URL` also work if those are easier to manage.
+Use the Supabase pooled Postgres connection string, not the direct database connection string. The direct Supabase DB host may resolve to IPv6-only addresses, which some Railway runtimes cannot reach.
+
+In Supabase, copy the connection string from:
+
+```txt
+Project Settings -> Database -> Connection pooling
+```
+
+The pooler hostname usually contains `pooler.supabase.com`. `DATABASE_URL` or `POSTGRES_URL` also work if those are easier to manage.
 
 When a database URL is present, Oyira automatically creates these tables on first use:
 

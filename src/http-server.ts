@@ -81,7 +81,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/ready") {
-      const readiness = readyReport();
+      const readiness = await readyReport();
       sendJson(response, readiness.ready ? 200 : 503, readiness);
       return;
     }
@@ -1713,7 +1713,8 @@ function compactRecord(input: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== ""));
 }
 
-function readyReport() {
+async function readyReport() {
+  const databaseOk = database.enabled ? await database.ping().catch(() => false) : true;
   const checks = [
     check("gemini.apiKey", Boolean(config.gemini.apiKey), "Gemini API key is configured."),
     check("gemini.model", Boolean(config.gemini.model), "Gemini model is configured."),
@@ -1733,7 +1734,7 @@ function readyReport() {
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
     check("stores.sessions", Boolean(config.sessions.storePath), "Session store path is configured."),
     check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured."),
-    check("database", true, database.enabled ? "Postgres persistent storage is configured." : "File storage fallback is configured."),
+    check("database", databaseOk, database.enabled ? "Postgres persistent storage is reachable." : "File storage fallback is configured."),
     check("stores.userApiKeys", Boolean(config.auth.userApiKeyStorePath), "User API key store path is configured.")
   ];
   const warnings = [

@@ -15,7 +15,7 @@ export interface X402PurchaseRecord {
   customerId?: string;
   x402Payer?: string;
   registrationContact?: RegistrationContact;
-  status: "challenge_created" | "payment_settled" | "registered" | "failed";
+  status: "challenge_created" | "payment_settled" | "registered" | "failed" | "expired";
   paymentTransaction?: string;
   ledgerRecordId?: string;
   error?: string;

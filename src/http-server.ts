@@ -130,6 +130,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/agent/x402/purchase-readiness") {
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const readiness = await x402PurchaseReadiness(body);
+      sendJson(response, readiness.ready ? 200 : 409, readiness);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/auth/signup") {
       if (!config.auth.publicSignupEnabled) {
         throw new HttpError(404, "Signup is not enabled.");
@@ -849,6 +856,7 @@ function manifest() {
       adminApiKeys: "/admin/api-keys",
       customerDomains: "/agent/customer/domains",
       x402Purchases: "/agent/x402/purchases",
+      x402PurchaseReadiness: "/agent/x402/purchase-readiness",
       message: "/agent/message",
       x402TestPayment: "/x402/test-payment",
       x402Purchase: "/x402/domain/purchase",
@@ -1186,9 +1194,21 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
       throw new HttpError(409, "Idempotency key already belongs to a different x402 purchase request.");
     }
 
+    if (existing.status === "expired") {
+      throw new HttpError(410, "x402 purchase challenge expired. Create a fresh quote with a new idempotencyKey before payment.");
+    }
+
     const quote = await domainQuotes.getQuote(existing.quoteId);
     if (!quote) {
       throw new HttpError(409, `Stored quote ${existing.quoteId} was not found for idempotency key ${idempotencyKey}.`);
+    }
+
+    if (existing.status === "challenge_created" && isQuoteExpired(quote)) {
+      await x402Purchases.update(existing.idempotencyKey, {
+        status: "expired",
+        error: `Quote ${quote.id} expired at ${quote.expiresAt}.`
+      });
+      throw new HttpError(410, "x402 purchase challenge expired. Create a fresh quote with a new idempotencyKey before payment.");
     }
 
     const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
@@ -1216,6 +1236,106 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
   });
 
   return { record, quote: usableQuote };
+}
+
+async function x402PurchaseReadiness(body: Record<string, unknown>) {
+  const checks: Array<{ name: string; ok: boolean; message: string }> = [];
+  let quote: DomainQuote | null = null;
+
+  checks.push({
+    name: "x402.config",
+    ok: Boolean(config.x402.enabled && config.x402.payTo && config.x402.network),
+    message: config.x402.enabled && config.x402.payTo && config.x402.network ? "x402 is configured." : "x402 is not fully configured."
+  });
+  checks.push({
+    name: "livePurchases",
+    ok: config.dynadot.allowLivePurchases,
+    message: config.dynadot.allowLivePurchases ? "Live Dynadot purchases are enabled." : "Live Dynadot purchases are disabled."
+  });
+  checks.push({
+    name: "x402.storage",
+    ok: database.enabled && (await database.ping().catch(() => false)),
+    message: database.enabled ? "x402 purchase storage is durable." : "x402 purchase storage is using file fallback."
+  });
+
+  try {
+    const registrationContact = readRequiredRegistrationContact(body);
+    dynadot.registerDomainRequest({
+      years: readNumber(body, "years", 1),
+      currency: config.quotes.defaultCurrency,
+      nameservers: readStringArray(body, "nameservers"),
+      registrationContact
+    });
+    checks.push({ name: "registrationContact", ok: true, message: "Registration contact is valid for Dynadot." });
+  } catch (error) {
+    checks.push({
+      name: "registrationContact",
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  try {
+    const quoteId = readOptionalString(body, "quoteId");
+    const years = readNumber(body, "years", 1);
+    const domainName = readOptionalString(body, "domainName")?.trim().toLowerCase();
+    quote = quoteId ? await domainQuotes.getQuote(quoteId) : domainName ? await domainQuotes.createQuote({ domainName, years }) : null;
+
+    if (!quote) {
+      checks.push({ name: "quote", ok: false, message: quoteId ? `Quote ${quoteId} was not found.` : "Provide domainName or quoteId." });
+    } else if (isQuoteExpired(quote)) {
+      checks.push({ name: "quote", ok: false, message: `Quote ${quote.id} expired at ${quote.expiresAt}.` });
+    } else {
+      checks.push({ name: "quote", ok: true, message: `Quote ${quote.id} is fresh.` });
+    }
+  } catch (error) {
+    checks.push({
+      name: "quote",
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  if (quote && !isQuoteExpired(quote)) {
+    try {
+      await assertDynadotAccountCanCoverQuote(quote);
+      checks.push({ name: "dynadot.balance", ok: true, message: "Dynadot account balance covers the registration cost." });
+    } catch (error) {
+      checks.push({
+        name: "dynadot.balance",
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  } else {
+    checks.push({ name: "dynadot.balance", ok: false, message: "Dynadot balance check requires a fresh quote." });
+  }
+
+  return {
+    agent: "oyira",
+    action: "x402-purchase-readiness",
+    ready: checks.every((entry) => entry.ok),
+    livePurchasesEnabled: config.dynadot.allowLivePurchases,
+    storageMode: database.enabled ? "postgres" : "file",
+    quote: quote
+      ? {
+          id: quote.id,
+          domainName: quote.domainName,
+          years: quote.years,
+          totalDue: quote.totalDue,
+          currency: quote.currency,
+          paymentSymbol: quote.paymentSymbol,
+          expiresAt: quote.expiresAt,
+          expiresInMinutes: Math.max(0, Math.ceil((new Date(quote.expiresAt).getTime() - Date.now()) / 60000)),
+          status: isQuoteExpired(quote) ? "expired" : quote.status
+        }
+      : null,
+    checks
+  };
+}
+
+function isQuoteExpired(quote: DomainQuote) {
+  return new Date(quote.expiresAt).getTime() <= Date.now();
 }
 
 async function assertDynadotAccountCanCoverQuote(quote: DomainQuote) {
@@ -1361,6 +1481,10 @@ function readX402PurchaseStatus(value: string | null) {
   }
 
   if (value === "challenge_created" || value === "payment_settled" || value === "registered" || value === "failed") {
+    return value;
+  }
+
+  if (value === "expired") {
     return value;
   }
 

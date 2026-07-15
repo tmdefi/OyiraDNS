@@ -205,6 +205,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/agent/brand-discovery") {
+      await assertAuthorized(request);
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      sendJson(response, 200, await discoverBrandDomains(body));
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/x402/test-payment") {
       assertX402PaymentConfigured();
       const body = await readJsonBody<Record<string, unknown>>(request);
@@ -857,6 +864,7 @@ function manifest() {
       customerDomains: "/agent/customer/domains",
       x402Purchases: "/agent/x402/purchases",
       x402PurchaseReadiness: "/agent/x402/purchase-readiness",
+      brandDiscovery: "/agent/brand-discovery",
       message: "/agent/message",
       x402TestPayment: "/x402/test-payment",
       x402Purchase: "/x402/domain/purchase",
@@ -946,6 +954,176 @@ function manifest() {
     ]
   };
 }
+
+async function discoverBrandDomains(body: Record<string, unknown>) {
+  const brief = readOptionalString(body, "brief") ?? readOptionalString(body, "description") ?? readOptionalString(body, "prompt");
+  if (!brief) {
+    throw new HttpError(400, "Provide brief, description, or prompt.");
+  }
+
+  const count = Math.min(Math.max(readNumber(body, "count", 8), 1), 20);
+  const tlds = readStringArray(body, "tlds")?.slice(0, 8);
+  const currency = readOptionalString(body, "currency") ?? config.quotes.defaultCurrency;
+  const candidates = await brandNameCandidates(brief, count);
+  const uniqueCandidates = uniqueStrings(candidates.map(normalizeBrandBaseName).filter(Boolean)).slice(0, count);
+  const checked = await Promise.all(
+    uniqueCandidates.map(async (name) => {
+      const variants = await domainQuotes.searchVariants({
+        name,
+        tlds,
+        currency,
+        showPrice: true
+      });
+      const available = variants.results.filter((entry) => entry.ok && entry.available === true);
+
+      return {
+        name,
+        availableCount: available.length,
+        bestAvailable: available[0]
+          ? {
+              domainName: available[0].domainName,
+              registrationPrice: available[0].registrationPrice ?? null,
+              currency
+            }
+          : null,
+        variants: variants.results.map((entry) => ({
+          domainName: entry.domainName,
+          available: entry.ok ? entry.available : null,
+          registrationPrice: entry.ok ? entry.registrationPrice ?? null : null,
+          status: entry.ok ? (entry.available === false ? "unavailable" : "checked") : "check_failed",
+          error: entry.ok ? undefined : entry.error
+        }))
+      };
+    })
+  );
+
+  checked.sort((left, right) => right.availableCount - left.availableCount || left.name.localeCompare(right.name));
+
+  return {
+    agent: "oyira",
+    action: "brand-discovery",
+    brief,
+    currency,
+    tlds: tlds ?? config.quotes.defaultTlds,
+    count: checked.length,
+    suggestions: checked
+  };
+}
+
+async function brandNameCandidates(brief: string, count: number) {
+  if (gemini.enabled) {
+    try {
+      const result = await gemini.createInteraction(
+        `Generate ${count} unique, memorable brand/domain base names for this idea: ${brief}
+
+Rules:
+- Return only a JSON array of strings.
+- Each string must be 4 to 15 characters.
+- Use letters only, no spaces, punctuation, numbers, or TLDs.
+- Names should be pronounceable and brandable, not generic keyword phrases.`
+      );
+      const parsed = parseJsonArray(result.outputText);
+      if (parsed.length > 0) {
+        return parsed;
+      }
+    } catch {
+      // Fall through to deterministic local candidates.
+    }
+  }
+
+  return fallbackBrandNames(brief, count);
+}
+
+function parseJsonArray(text: string) {
+  const trimmed = text.trim();
+  const match = trimmed.match(/\[[\s\S]*\]/);
+  if (!match) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(match[0]) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function fallbackBrandNames(brief: string, count: number) {
+  const words = brief
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !BRAND_STOP_WORDS.has(word))
+    .slice(0, 8);
+  const roots = words.length > 0 ? words : ["oyira", "nova", "atlas"];
+  const suffixes = ["ly", "io", "hq", "go", "nest", "base", "wise", "labs", "loop", "grid"];
+  const names: string[] = [];
+
+  for (const root of roots) {
+    names.push(root);
+    for (const suffix of suffixes) {
+      names.push(`${root}${suffix}`);
+    }
+  }
+
+  for (let index = 0; index < roots.length - 1; index += 1) {
+    names.push(`${roots[index]}${roots[index + 1]}`);
+  }
+
+  return uniqueStrings(names.map(normalizeBrandBaseName).filter(Boolean)).slice(0, count);
+}
+
+function normalizeBrandBaseName(value: string) {
+  return value.toLowerCase().replace(/[^a-z]/g, "").slice(0, 15);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values));
+}
+
+const BRAND_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "available",
+  "buy",
+  "can",
+  "check",
+  "cost",
+  "domain",
+  "find",
+  "for",
+  "how",
+  "i",
+  "if",
+  "is",
+  "it",
+  "lets",
+  "me",
+  "monitor",
+  "my",
+  "please",
+  "price",
+  "purchase",
+  "quote",
+  "register",
+  "search",
+  "show",
+  "status",
+  "the",
+  "to",
+  "want",
+  "brand",
+  "business",
+  "company",
+  "startup",
+  "unique",
+  "memorable",
+  "name",
+  "names",
+  "idea"
+]);
 
 async function assertAuthorized(request: http.IncomingMessage): Promise<AuthPrincipal> {
   const token = readAuthToken(request);

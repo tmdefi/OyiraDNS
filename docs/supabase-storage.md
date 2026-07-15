@@ -42,3 +42,5 @@ If no database URL is configured, Oyira falls back to local JSON files.
 For x402 purchase safety, unpaid purchase challenges are stored with `status: "challenge_created"` and are marked `status: "expired"` if the linked quote expires before payment.
 
 Use `POST /agent/x402/purchase-readiness` to check live-purchase readiness before attempting x402 payment. It validates registration contact shape, quote freshness, Dynadot balance coverage, durable x402 storage, and the live-purchase flag.
+
+Use `POST /agent/brand-discovery` to generate brandable base-name ideas and check configured TLD availability/pricing in real time. This endpoint is safe: it only searches domains and never creates payment or registration.

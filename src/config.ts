@@ -58,6 +58,11 @@ export interface AuditConfig {
   logPath: string;
 }
 
+export interface DatabaseConfig {
+  url: string;
+  ssl: boolean;
+}
+
 export interface UserApiKey {
   customerId: string;
   keyId: string;
@@ -99,6 +104,7 @@ export interface ServiceConfig {
   ledger: LedgerConfig;
   sessions: SessionConfig;
   audit: AuditConfig;
+  database: DatabaseConfig;
   quotes: QuoteConfig;
 }
 
@@ -210,6 +216,10 @@ export function loadConfig(): ServiceConfig {
     },
     audit: {
       logPath: readEnv("OYIRA_AUDIT_LOG_PATH", "data/oyira-audit.jsonl")
+    },
+    database: {
+      url: readFirstEnv(["SUPABASE_DB_URL", "DATABASE_URL", "POSTGRES_URL"]),
+      ssl: readEnv("DATABASE_SSL", "true") !== "false"
     },
     quotes: {
       storePath: readEnv("QUOTE_STORE_PATH", "data/domain-quotes.json"),

@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { QuoteConfig } from "./config.js";
+import type { Database } from "./database.js";
 import type { DynadotClient } from "./dynadot.js";
 import type { CreatePaymentResult, OkxPaymentClient } from "./okx.js";
 
@@ -41,11 +42,13 @@ export class DomainQuoteService {
   private readonly config: QuoteConfig;
   private readonly dynadot: DynadotClient;
   private readonly okx: OkxPaymentClient;
+  private readonly database?: Database;
 
-  constructor(config: QuoteConfig, dynadot: DynadotClient, okx: OkxPaymentClient) {
+  constructor(config: QuoteConfig, dynadot: DynadotClient, okx: OkxPaymentClient, database?: Database) {
     this.config = config;
     this.dynadot = dynadot;
     this.okx = okx;
+    this.database = database;
   }
 
   async createQuote(input: {
@@ -233,6 +236,11 @@ export class DomainQuoteService {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: DomainQuote }>("select record from oyira_quotes order by created_at asc");
+      return { quotes: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.storePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -250,6 +258,22 @@ export class DomainQuoteService {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      for (const quote of store.quotes) {
+        await this.database.query(
+          `insert into oyira_quotes (id, domain_name, status, record, created_at, updated_at)
+           values ($1, $2, $3, $4::jsonb, $5, $6)
+           on conflict (id) do update set
+             domain_name = excluded.domain_name,
+             status = excluded.status,
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [quote.id, quote.domainName, quote.status, JSON.stringify(quote), quote.createdAt, quote.updatedAt]
+        );
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.storePath), { recursive: true });
     await writeFile(this.config.storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

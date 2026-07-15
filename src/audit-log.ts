@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { AuditConfig } from "./config.js";
+import type { Database } from "./database.js";
 
 export interface AuditEvent {
   action: string;
@@ -12,7 +13,10 @@ export interface AuditEvent {
 }
 
 export class AuditLog {
-  constructor(private readonly config: AuditConfig) {}
+  constructor(
+    private readonly config: AuditConfig,
+    private readonly database?: Database
+  ) {}
 
   async append(event: AuditEvent) {
     const entry = {
@@ -21,8 +25,12 @@ export class AuditLog {
       ...event
     };
 
-    await mkdir(path.dirname(this.config.logPath), { recursive: true });
-    await appendFile(this.config.logPath, `${JSON.stringify(entry)}\n`, "utf8");
+    if (this.database?.enabled) {
+      await this.database.insertAuditEvent(entry);
+    } else {
+      await mkdir(path.dirname(this.config.logPath), { recursive: true });
+      await appendFile(this.config.logPath, `${JSON.stringify(entry)}\n`, "utf8");
+    }
 
     return entry;
   }

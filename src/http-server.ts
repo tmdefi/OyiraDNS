@@ -7,6 +7,7 @@ import type { PaymentPayload } from "@okxweb3/x402-core/types";
 import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AuditLog } from "./audit-log.js";
 import { loadConfig } from "./config.js";
+import { Database } from "./database.js";
 import { DynadotClient, type DnsRecordInput, type RegistrationContact } from "./dynadot.js";
 import { DomainLedger } from "./domain-ledger.js";
 import { DomainMonitorService } from "./domain-monitor.js";
@@ -19,16 +20,17 @@ import { UserApiKeyStore } from "./user-api-keys.js";
 import { hashX402PurchaseRequest, X402PurchaseStore } from "./x402-purchases.js";
 
 const config = loadConfig();
+const database = new Database(config.database);
 const dynadot = new DynadotClient(config.dynadot);
 const okx = new OkxPaymentClient(config.okx);
 const domainMonitor = new DomainMonitorService(config.monitoring, dynadot);
-const domainLedger = new DomainLedger(config.ledger);
-const domainQuotes = new DomainQuoteService(config.quotes, dynadot, okx);
+const domainLedger = new DomainLedger(config.ledger, database);
+const domainQuotes = new DomainQuoteService(config.quotes, dynadot, okx, database);
 const gemini = new GeminiClient(config.gemini);
 const sessions = new OyiraSessionStore(config.sessions);
-const auditLog = new AuditLog(config.audit);
+const auditLog = new AuditLog(config.audit, database);
 const userApiKeys = new UserApiKeyStore(config.auth);
-const x402Purchases = new X402PurchaseStore(config.x402);
+const x402Purchases = new X402PurchaseStore(config.x402, database);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
 let x402PurchaseServer: Promise<x402HTTPResourceServer> | null = null;
 let x402TestPaymentServer: Promise<x402HTTPResourceServer> | null = null;
@@ -1731,6 +1733,7 @@ function readyReport() {
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
     check("stores.sessions", Boolean(config.sessions.storePath), "Session store path is configured."),
     check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured."),
+    check("database", true, database.enabled ? "Postgres persistent storage is configured." : "File storage fallback is configured."),
     check("stores.userApiKeys", Boolean(config.auth.userApiKeyStorePath), "User API key store path is configured.")
   ];
   const warnings = [
@@ -1752,6 +1755,7 @@ function readyReport() {
     dynadotEnv: config.dynadot.env,
     marketplaceMode: "a2mcp-x402",
     marketplaceRequiresCustomerApiKey: false,
+    storageMode: database.enabled ? "postgres" : "file",
     livePurchasesEnabled: config.dynadot.allowLivePurchases,
     domainPushesEnabled: config.dynadot.allowDomainPushes,
     dnsChangesEnabled: config.dynadot.allowDnsChanges,

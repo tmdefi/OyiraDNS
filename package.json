@@ -28,10 +28,12 @@
     "@okxweb3/x402-core": "^0.1.0",
     "@okxweb3/x402-evm": "^0.2.1",
     "dotenv": "^16.4.7",
+    "pg": "^8.22.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/pg": "^8.20.0",
     "typescript": "^5.7.2"
   },
   "engines": {

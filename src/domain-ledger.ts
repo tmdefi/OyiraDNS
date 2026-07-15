@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { LedgerConfig } from "./config.js";
+import type { Database } from "./database.js";
 import type { RegistrationContact } from "./dynadot.js";
 
 export interface DomainLedgerRecord {
@@ -34,9 +35,11 @@ interface StoreShape {
 
 export class DomainLedger {
   private readonly config: LedgerConfig;
+  private readonly database?: Database;
 
-  constructor(config: LedgerConfig) {
+  constructor(config: LedgerConfig, database?: Database) {
     this.config = config;
+    this.database = database;
   }
 
   async createRecord(input: {
@@ -147,6 +150,13 @@ export class DomainLedger {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: DomainLedgerRecord }>(
+        "select record from oyira_domain_ledger order by created_at asc"
+      );
+      return { records: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.storePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -164,6 +174,34 @@ export class DomainLedger {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      for (const record of store.records) {
+        await this.database.query(
+          `insert into oyira_domain_ledger
+             (id, domain_name, customer_id, x402_payer, payment_id, record, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+           on conflict (id) do update set
+             domain_name = excluded.domain_name,
+             customer_id = excluded.customer_id,
+             x402_payer = excluded.x402_payer,
+             payment_id = excluded.payment_id,
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [
+            record.id,
+            record.domainName,
+            record.customerId ?? null,
+            record.x402Payer ?? null,
+            record.paymentId ?? null,
+            JSON.stringify(record),
+            record.createdAt,
+            record.updatedAt
+          ]
+        );
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.storePath), { recursive: true });
     await writeFile(this.config.storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

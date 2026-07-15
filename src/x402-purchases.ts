@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { X402Config } from "./config.js";
+import type { Database } from "./database.js";
 import type { RegistrationContact } from "./dynadot.js";
 
 export interface X402PurchaseRecord {
@@ -27,7 +28,10 @@ interface StoreShape {
 }
 
 export class X402PurchaseStore {
-  constructor(private readonly config: X402Config) {}
+  constructor(
+    private readonly config: X402Config,
+    private readonly database?: Database
+  ) {}
 
   async getByIdempotencyKey(idempotencyKey: string) {
     const store = await this.readStore();
@@ -126,6 +130,13 @@ export class X402PurchaseStore {
   }
 
   private async readStore(): Promise<StoreShape> {
+    if (this.database?.enabled) {
+      const result = await this.database.query<{ record: X402PurchaseRecord }>(
+        "select record from oyira_x402_purchases order by created_at asc"
+      );
+      return { purchases: result.rows.map((row) => row.record) };
+    }
+
     try {
       const raw = await readFile(this.config.purchaseStorePath, "utf8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
@@ -140,6 +151,36 @@ export class X402PurchaseStore {
   }
 
   private async writeStore(store: StoreShape) {
+    if (this.database?.enabled) {
+      for (const purchase of store.purchases) {
+        await this.database.query(
+          `insert into oyira_x402_purchases
+             (idempotency_key, id, domain_name, customer_id, x402_payer, status, record, created_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+           on conflict (idempotency_key) do update set
+             id = excluded.id,
+             domain_name = excluded.domain_name,
+             customer_id = excluded.customer_id,
+             x402_payer = excluded.x402_payer,
+             status = excluded.status,
+             record = excluded.record,
+             updated_at = excluded.updated_at`,
+          [
+            purchase.idempotencyKey,
+            purchase.id,
+            purchase.domainName,
+            purchase.customerId ?? null,
+            purchase.x402Payer ?? null,
+            purchase.status,
+            JSON.stringify(purchase),
+            purchase.createdAt,
+            purchase.updatedAt
+          ]
+        );
+      }
+      return;
+    }
+
     await mkdir(path.dirname(this.config.purchaseStorePath), { recursive: true });
     await writeFile(this.config.purchaseStorePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   }

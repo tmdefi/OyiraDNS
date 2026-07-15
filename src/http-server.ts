@@ -10,7 +10,7 @@ import { loadConfig } from "./config.js";
 import { DynadotClient, type DnsRecordInput, type RegistrationContact } from "./dynadot.js";
 import { DomainLedger } from "./domain-ledger.js";
 import { DomainMonitorService } from "./domain-monitor.js";
-import { DomainQuoteService } from "./domain-quotes.js";
+import { DomainQuoteService, type DomainQuote } from "./domain-quotes.js";
 import { GeminiClient } from "./gemini.js";
 import { OkxPaymentClient } from "./okx.js";
 import { OyiraService, type OyiraMessageInput } from "./oyira-service.js";
@@ -1189,7 +1189,12 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
       throw new HttpError(409, `Stored quote ${existing.quoteId} was not found for idempotency key ${idempotencyKey}.`);
     }
 
-    return { record: existing, quote: await domainQuotes.assertQuoteUsable(quote.id, quote) };
+    const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
+    if (existing.status !== "registered") {
+      await assertDynadotAccountCanCoverQuote(usableQuote);
+    }
+
+    return { record: existing, quote: usableQuote };
   }
 
   const quote = await domainQuotes.createQuote({
@@ -1197,6 +1202,7 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
     years
   });
   const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
+  await assertDynadotAccountCanCoverQuote(usableQuote);
   const record = await x402Purchases.create({
     idempotencyKey,
     requestHash,
@@ -1208,6 +1214,54 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
   });
 
   return { record, quote: usableQuote };
+}
+
+async function assertDynadotAccountCanCoverQuote(quote: DomainQuote) {
+  const accountInfo = await dynadot.getAccountInfo();
+  const balance = extractDynadotBalance(accountInfo, quote.currency);
+  const registrationCost = Number(quote.dynadotCost);
+
+  if (!Number.isFinite(registrationCost) || registrationCost <= 0) {
+    throw new HttpError(503, "Could not verify Dynadot registration cost before payment; x402 payment is not being accepted.");
+  }
+
+  if (balance === null) {
+    throw new HttpError(503, "Could not verify Dynadot account balance before payment; x402 payment is not being accepted.");
+  }
+
+  if (balance < registrationCost) {
+    throw new HttpError(503, "Dynadot account balance is below the registration cost; x402 payment is not being accepted.");
+  }
+}
+
+function extractDynadotBalance(response: unknown, currency: string) {
+  const data = objectValue(response);
+  const accountInfo = objectValue(objectValue(data.data).account_info ?? data.account_info);
+  const balanceList = accountInfo.balance_list;
+  const normalizedCurrency = currency.trim().toUpperCase();
+
+  if (Array.isArray(balanceList)) {
+    const currencyBalance = balanceList.find((entry) => {
+      const balance = objectValue(entry);
+      return String(balance.currency ?? "").trim().toUpperCase() === normalizedCurrency;
+    });
+
+    const amount = parseLoosePositiveAmount(objectValue(currencyBalance).amount);
+    if (amount !== null) {
+      return amount;
+    }
+  }
+
+  return parseLoosePositiveAmount(accountInfo.account_balance);
+}
+
+function parseLoosePositiveAmount(value: unknown) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const parsed = Number(String(value).replace(/[^0-9.]/g, ""));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function x402RequestContext(

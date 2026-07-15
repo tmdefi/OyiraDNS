@@ -118,6 +118,12 @@ export class DynadotClient {
     });
   }
 
+  getAccountInfo() {
+    return this.request("GET", `/restful/${this.config.apiVersion}/accounts/info`, {
+      requireSignature: true
+    });
+  }
+
   registerDomain(input: {
     domainName: string;
     years?: number;

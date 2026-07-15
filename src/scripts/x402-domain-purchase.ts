@@ -28,6 +28,7 @@ const body = compactObject({
     registrantName: requiredEnv("X402_REGISTRANT_NAME"),
     email: requiredEnv("X402_REGISTRANT_EMAIL"),
     phone: requiredEnv("X402_REGISTRANT_PHONE"),
+    phoneCountryCode: process.env.X402_REGISTRANT_PHONE_CC,
     address: requiredEnv("X402_REGISTRANT_ADDRESS"),
     city: requiredEnv("X402_REGISTRANT_CITY"),
     country: requiredEnv("X402_REGISTRANT_COUNTRY"),

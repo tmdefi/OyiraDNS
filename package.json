@@ -14,6 +14,7 @@
     "monitor:worker": "node dist/scripts/monitor-worker.js",
     "okx:create-payment": "node dist/scripts/create-payment.js",
     "x402:test-payment": "node dist/scripts/x402-test-payment.js",
+    "x402:domain-preflight": "node dist/scripts/x402-domain-purchase-preflight.js",
     "x402:domain-purchase": "node dist/scripts/x402-domain-purchase.js",
     "domain:search-variants": "node dist/scripts/search-domain-variants.js",
     "agent:preview": "node dist/scripts/agent-preview.js",

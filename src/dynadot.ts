@@ -7,12 +7,39 @@ export interface RegistrationContact {
   registrantName: string;
   email: string;
   phone: string;
+  phoneCountryCode?: string;
   address: string;
   city: string;
   country: string;
   state?: string;
   postalCode?: string;
   organization?: string;
+}
+
+export interface DynadotRegisterDomainRequest {
+  domain: {
+    duration: number;
+    registrant_contact: DynadotRegisterContact;
+    admin_contact: DynadotRegisterContact;
+    tech_contact: DynadotRegisterContact;
+    billing_contact: DynadotRegisterContact;
+    name_server_list?: string[];
+    privacy: "off" | "partial" | "full";
+  };
+  currency?: string;
+}
+
+export interface DynadotRegisterContact {
+  organization?: string;
+  name: string;
+  email: string;
+  phone_number: string;
+  phone_cc: string;
+  address1: string;
+  city: string;
+  state?: string;
+  zip: string;
+  country: string;
 }
 
 export interface DomainPushInput {
@@ -36,6 +63,30 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown>;
   requireSignature?: boolean;
+}
+
+function parsePhone(phone: string, phoneCountryCode?: string) {
+  const normalized = phone.trim().replace(/[()\s.-]/g, "");
+  const match = normalized.match(/^(?:\+|00)([1-9]\d{0,3})(\d{4,14})$/);
+
+  if (match) {
+    return {
+      countryCode: match[1],
+      number: match[2]
+    };
+  }
+
+  const normalizedCountryCode = phoneCountryCode?.trim().replace(/^\+/, "");
+  const normalizedNumber = normalized.replace(/^\+/, "");
+
+  if (!normalizedCountryCode || !/^[1-9]\d{0,3}$/.test(normalizedCountryCode) || !/^\d{4,14}$/.test(normalizedNumber)) {
+    throw new Error("Registration contact phone must include country code, for example +14155550100, or provide phoneCountryCode.");
+  }
+
+  return {
+    countryCode: normalizedCountryCode,
+    number: normalizedNumber
+  };
 }
 
 export class DynadotClient {
@@ -80,17 +131,34 @@ export class DynadotClient {
 
     return this.request("POST", this.domainPath(input.domainName, "register"), {
       requireSignature: true,
-      body: {
-        domain: input.domainName,
-        domainName: input.domainName,
-        duration: input.years ?? 1,
-        currency: input.currency,
-        nameServers: input.nameservers,
-        paymentConfirmationId: input.paymentConfirmationId,
-        registrationContact: input.registrationContact,
-        registrantContact: input.registrationContact
-      }
+      body: this.registerDomainRequest(input) as unknown as Record<string, unknown>
     });
+  }
+
+  registerDomainRequest(input: {
+    years?: number;
+    currency?: string;
+    nameservers?: string[];
+    registrationContact?: RegistrationContact;
+  }): DynadotRegisterDomainRequest {
+    if (!input.registrationContact) {
+      throw new Error("Missing registration contact.");
+    }
+
+    const contact = this.toDynadotRegisterContact(input.registrationContact);
+
+    return {
+      domain: this.compactObject({
+        duration: input.years ?? 1,
+        registrant_contact: contact,
+        admin_contact: contact,
+        tech_contact: contact,
+        billing_contact: contact,
+        name_server_list: input.nameservers,
+        privacy: "full"
+      }) as DynadotRegisterDomainRequest["domain"],
+      currency: input.currency?.toLowerCase()
+    };
   }
 
   getOrderStatus(orderId: string) {
@@ -249,6 +317,27 @@ export class DynadotClient {
 
   private domainPath(identifier: string, action: string) {
     return `/restful/${this.config.apiVersion}/domains/${encodeURIComponent(identifier)}/${action}`;
+  }
+
+  private toDynadotRegisterContact(contact: RegistrationContact): DynadotRegisterContact {
+    const phone = parsePhone(contact.phone, contact.phoneCountryCode);
+
+    if (!contact.postalCode?.trim()) {
+      throw new Error("Missing registration contact postalCode. Dynadot register requires zip.");
+    }
+
+    return this.compactObject({
+      organization: contact.organization,
+      name: contact.registrantName,
+      email: contact.email,
+      phone_number: phone.number,
+      phone_cc: phone.countryCode,
+      address1: contact.address,
+      city: contact.city,
+      state: contact.state,
+      zip: contact.postalCode,
+      country: contact.country.toUpperCase()
+    }) as unknown as DynadotRegisterContact;
   }
 
   private orderPath(identifier: string, action: string) {

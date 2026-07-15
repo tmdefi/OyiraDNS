@@ -1163,12 +1163,19 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
   const years = readNumber(body, "years", 1);
   const registrationContact = readRequiredRegistrationContact(body);
   const customerId = readOptionalString(body, "customerId");
+  const nameservers = readStringArray(body, "nameservers");
+  dynadot.registerDomainRequest({
+    years,
+    currency: config.quotes.defaultCurrency,
+    nameservers,
+    registrationContact
+  });
   const requestHash = hashX402PurchaseRequest({
     customerId,
     domainName,
     years,
     registrationContact,
-    nameservers: readStringArray(body, "nameservers")
+    nameservers
   });
   const existing = await x402Purchases.getByIdempotencyKey(idempotencyKey);
 
@@ -1494,7 +1501,7 @@ function readRequiredRegistrationContact(body: Record<string, unknown>): Registr
     throw new HttpError(400, "Missing required field: registrationContact.");
   }
 
-  for (const key of ["registrantName", "email", "phone", "address", "city", "country"] as const) {
+  for (const key of ["registrantName", "email", "phone", "address", "city", "country", "postalCode"] as const) {
     if (typeof contact[key] !== "string" || !contact[key]?.trim()) {
       throw new HttpError(400, `Missing required registrationContact field: ${key}.`);
     }

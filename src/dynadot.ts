@@ -26,7 +26,6 @@ export interface DynadotRegisterDomainRequest {
     name_server_list?: string[];
     privacy: "off" | "partial" | "full";
   };
-  currency?: string;
 }
 
 export interface DynadotRegisterContact {
@@ -159,7 +158,8 @@ export class DynadotClient {
         name_server_list: input.nameservers,
         privacy: "full"
       }) as DynadotRegisterDomainRequest["domain"],
-      currency: input.currency?.toLowerCase()
+      // Dynadot register treats currency as optional and uses the account default.
+      // Omitting it avoids API enum parsing drift while quotes still use explicit USD pricing.
     };
   }
 

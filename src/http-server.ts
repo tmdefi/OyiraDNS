@@ -368,31 +368,62 @@ const server = http.createServer(async (request, response) => {
 
       const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
       const registrationContact = readRequiredRegistrationContact(body);
-      const registration = await dynadot.registerDomain({
-        domainName: quote.domainName,
-        years: quote.years,
-        currency: quote.currency,
-        nameservers: readStringArray(body, "nameservers"),
-        registrationContact,
-        paymentConfirmationId: settlement.transaction ?? prepared.record.idempotencyKey
-      });
-      const ledgerRecord = await domainLedger.createRecord({
-        domainName: quote.domainName,
-        customerId: settledCustomerId,
-        x402Payer: verifiedPaymentPayer,
-        years: quote.years,
-        currency: quote.currency,
-        paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
-        registrationContact,
-        dynadotRegistration: registration,
-        payment: {
-          provider: "x402",
-          network: settlement.requirements.network,
-          transaction: settlement.transaction,
-          amount: settlement.requirements.amount,
-          asset: settlement.requirements.asset
-        }
-      });
+      let registration: unknown;
+      let ledgerRecord: Awaited<ReturnType<DomainLedger["createRecord"]>>;
+
+      try {
+        registration = await dynadot.registerDomain({
+          domainName: quote.domainName,
+          years: quote.years,
+          currency: quote.currency,
+          nameservers: readStringArray(body, "nameservers"),
+          registrationContact,
+          paymentConfirmationId: settlement.transaction ?? prepared.record.idempotencyKey
+        });
+        ledgerRecord = await domainLedger.createRecord({
+          domainName: quote.domainName,
+          customerId: settledCustomerId,
+          x402Payer: verifiedPaymentPayer,
+          years: quote.years,
+          currency: quote.currency,
+          paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
+          registrationContact,
+          dynadotRegistration: registration,
+          payment: {
+            provider: "x402",
+            network: settlement.requirements.network,
+            transaction: settlement.transaction,
+            amount: settlement.requirements.amount,
+            asset: settlement.requirements.asset
+          }
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await x402Purchases.update(prepared.record.idempotencyKey, {
+          status: "failed",
+          error: `Payment settled but registration failed: ${message}`,
+          paymentTransaction: settlement.transaction,
+          customerId: settledCustomerId,
+          x402Payer: verifiedPaymentPayer
+        });
+        await auditLog.append({
+          action: "x402-domain-purchase",
+          status: "failure",
+          request: auditRequest(body, {
+            role: "customer",
+            customerId: settledCustomerId,
+            keyId: readOptionalString(body, "idempotencyKey")
+          }),
+          result: {
+            domainName: quote.domainName,
+            quoteId: quote.id,
+            x402Payer: verifiedPaymentPayer,
+            paymentId: settlement.transaction,
+            error: message
+          }
+        });
+        throw error;
+      }
 
       await x402Purchases.update(prepared.record.idempotencyKey, {
         status: "registered",

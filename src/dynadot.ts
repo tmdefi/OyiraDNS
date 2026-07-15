@@ -81,6 +81,7 @@ export class DynadotClient {
     return this.request("POST", this.domainPath(input.domainName, "register"), {
       requireSignature: true,
       body: {
+        domain: input.domainName,
         domainName: input.domainName,
         duration: input.years ?? 1,
         currency: input.currency,

@@ -80,7 +80,9 @@ function parsePhone(phone: string, phoneCountryCode?: string) {
   const normalizedNumber = normalized.replace(/^\+/, "");
 
   if (!normalizedCountryCode || !/^[1-9]\d{0,3}$/.test(normalizedCountryCode) || !/^\d{4,14}$/.test(normalizedNumber)) {
-    throw new Error("Registration contact phone must include country code, for example +14155550100, or provide phoneCountryCode.");
+    throw new Error(
+      "Registration contact phone must include a phone country code, for example +14155550100, or provide phoneCountryCode such as 1, 44, or 234."
+    );
   }
 
   return {

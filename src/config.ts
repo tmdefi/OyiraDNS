@@ -38,6 +38,15 @@ export interface X402Config {
   maxTimeoutSeconds: number;
   syncSettle: boolean;
   purchaseStorePath: string;
+  accepts: X402AcceptedAsset[];
+}
+
+export interface X402AcceptedAsset {
+  symbol: string;
+  network: string;
+  asset: string;
+  decimals: number;
+  payTo?: string;
 }
 
 export interface MonitoringConfig {
@@ -147,6 +156,27 @@ function parseUserApiKeys(value: string): UserApiKey[] {
   }).filter((entry) => entry.customerId && entry.token);
 }
 
+function parseX402AcceptedAssets(value: string): X402AcceptedAsset[] {
+  return parseCsv(value)
+    .map((entry): X402AcceptedAsset | null => {
+      const [symbol, network, asset, decimals, payTo] = entry.split("|").map((part) => part.trim());
+      const parsedDecimals = Number(decimals);
+
+      if (!symbol || !network || !asset || !Number.isInteger(parsedDecimals) || parsedDecimals < 0 || parsedDecimals > 30) {
+        return null;
+      }
+
+      return {
+        symbol: symbol.toUpperCase(),
+        network,
+        asset,
+        decimals: parsedDecimals,
+        ...(payTo ? { payTo } : {})
+      };
+    })
+    .filter((entry): entry is X402AcceptedAsset => Boolean(entry));
+}
+
 export function loadConfig(): ServiceConfig {
   const dynadotEnv = parseDynadotEnv(readEnv("DYNADOT_ENV", "sandbox"));
   const prefix = dynadotEnv === "live" ? "DYNADOT_LIVE" : "DYNADOT_SANDBOX";
@@ -201,7 +231,8 @@ export function loadConfig(): ServiceConfig {
       testPaymentAmount: readEnv("X402_TEST_PAYMENT_AMOUNT", "0.01"),
       maxTimeoutSeconds: Number(readEnv("X402_MAX_TIMEOUT_SECONDS", "300")),
       syncSettle: readEnv("X402_SYNC_SETTLE", "false") === "true",
-      purchaseStorePath: readEnv("X402_PURCHASE_STORE_PATH", "data/x402-domain-purchases.json")
+      purchaseStorePath: readEnv("X402_PURCHASE_STORE_PATH", "data/x402-domain-purchases.json"),
+      accepts: parseX402AcceptedAssets(readEnv("X402_ACCEPTS"))
     },
     monitoring: {
       storePath: readEnv("MONITOR_STORE_PATH", "data/domain-monitors.json"),

@@ -1229,7 +1229,7 @@ function assertX402PaymentConfigured() {
     throw new HttpError(404, "x402 purchase endpoint is disabled.");
   }
 
-  if (!config.x402.payTo) {
+  if (!config.x402.payTo && (config.x402.accepts.length === 0 || config.x402.accepts.some((accept) => !accept.payTo))) {
     throw new HttpError(503, "X402_PAY_TO or OKX_WALLET_ADDRESS must be configured before x402 purchases can run.");
   }
 
@@ -1254,17 +1254,14 @@ async function getX402TestPaymentServer() {
       baseUrl: config.okx.baseUrl,
       syncSettle: config.x402.syncSettle
     });
-    const x402Network = config.x402.network as `${string}:${string}`;
-    const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
+    const x402Networks = x402AcceptedNetworks();
+    const resourceServer = x402Networks.reduce(
+      (server, network) => server.register(network as `${string}:${string}`, new ExactEvmScheme()),
+      new x402ResourceServer(facilitator)
+    );
     const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
       "POST /x402/test-payment": {
-        accepts: {
-          scheme: "exact",
-          network: x402Network,
-          payTo: config.x402.payTo,
-          price: `$${config.x402.testPaymentAmount}`,
-          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
-        },
+        accepts: x402PaymentOptions(() => config.x402.testPaymentAmount),
         description: "Settle a small x402 payment through Oyira without registering a domain.",
         mimeType: "application/json",
         unpaidResponseBody: () => ({
@@ -1297,20 +1294,17 @@ async function getX402PurchaseServer() {
       baseUrl: config.okx.baseUrl,
       syncSettle: config.x402.syncSettle
     });
-    const x402Network = config.x402.network as `${string}:${string}`;
-    const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
+    const x402Networks = x402AcceptedNetworks();
+    const resourceServer = x402Networks.reduce(
+      (server, network) => server.register(network as `${string}:${string}`, new ExactEvmScheme()),
+      new x402ResourceServer(facilitator)
+    );
     const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
       "POST /x402/domain/purchase": {
-        accepts: {
-          scheme: "exact",
-          network: x402Network,
-          payTo: config.x402.payTo,
-          price: async (context) => {
+        accepts: x402PaymentOptions(async (context) => {
             const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
-            return `$${prepared.quote.totalDue}`;
-          },
-          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
-        },
+            return prepared.quote.totalDue;
+          }),
         description: "Register a domain through Oyira after exact x402 payment settlement.",
         mimeType: "application/json",
         unpaidResponseBody: async (context) => {
@@ -1343,6 +1337,54 @@ async function getX402PurchaseServer() {
   }
 
   return x402PurchaseServer;
+}
+
+function x402AcceptedNetworks() {
+  const configuredNetworks = config.x402.accepts.map((accept) => accept.network);
+  return uniqueStrings(configuredNetworks.length > 0 ? configuredNetworks : [config.x402.network]);
+}
+
+function x402PaymentOptions(price: string | ((context: HTTPRequestContext) => string | Promise<string>)) {
+  const dynamicPrice = async (context: HTTPRequestContext, decimals?: number) => {
+    const amount = typeof price === "function" ? await price(context) : price;
+    return decimals === undefined ? `$${amount}` : { amount: decimalUsdToUnits(amount, decimals), asset: "" };
+  };
+
+  if (config.x402.accepts.length === 0) {
+    return {
+      scheme: "exact",
+      network: config.x402.network as `${string}:${string}`,
+      payTo: config.x402.payTo,
+      price: (context: HTTPRequestContext) => dynamicPrice(context),
+      maxTimeoutSeconds: config.x402.maxTimeoutSeconds
+    };
+  }
+
+  return config.x402.accepts.map((accept) => ({
+    scheme: "exact",
+    network: accept.network as `${string}:${string}`,
+    payTo: accept.payTo ?? config.x402.payTo,
+    price: async (context: HTTPRequestContext) => ({
+      amount: decimalUsdToUnits(typeof price === "function" ? await price(context) : price, accept.decimals),
+      asset: accept.asset
+    }),
+    maxTimeoutSeconds: config.x402.maxTimeoutSeconds,
+    extra: {
+      symbol: accept.symbol
+    }
+  }));
+}
+
+function decimalUsdToUnits(amount: string, decimals: number) {
+  const normalized = amount.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+    throw new Error(`Invalid x402 amount: ${amount}.`);
+  }
+
+  const [whole, fraction = ""] = normalized.split(".");
+  const paddedFraction = fraction.padEnd(decimals, "0").slice(0, decimals);
+  const units = `${whole}${paddedFraction}`.replace(/^0+(?=\d)/, "");
+  return units || "0";
 }
 
 async function prepareX402Purchase(body: Record<string, unknown>) {

@@ -1734,7 +1734,13 @@ async function readyReport() {
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
     check("stores.sessions", Boolean(config.sessions.storePath), "Session store path is configured."),
     check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured."),
-    check("database", databaseOk, database.enabled ? "Postgres persistent storage is reachable." : "File storage fallback is configured."),
+    database.enabled
+      ? {
+          name: "database",
+          ok: databaseOk,
+          message: databaseOk ? "Postgres persistent storage is reachable." : "Postgres persistent storage is configured but unreachable."
+        }
+      : check("database", true, "File storage fallback is configured."),
     check("stores.userApiKeys", Boolean(config.auth.userApiKeyStorePath), "User API key store path is configured.")
   ];
   const warnings = [

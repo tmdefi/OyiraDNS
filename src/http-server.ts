@@ -31,6 +31,7 @@ const userApiKeys = new UserApiKeyStore(config.auth);
 const x402Purchases = new X402PurchaseStore(config.x402);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
 let x402PurchaseServer: Promise<x402HTTPResourceServer> | null = null;
+let x402TestPaymentServer: Promise<x402HTTPResourceServer> | null = null;
 
 interface AuthPrincipal {
   role: "owner" | "customer";
@@ -192,6 +193,103 @@ const server = http.createServer(async (request, response) => {
       const body = withPrincipal(await readJsonBody<OyiraMessageInput>(request), principal);
       const result = await oyira.handleMessage(body);
       sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/x402/test-payment") {
+      assertX402PaymentConfigured();
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const context = x402RequestContext(request, url, body);
+      const resourceServer = await getX402TestPaymentServer();
+      const paymentResult = await resourceServer.processHTTPRequest(context);
+
+      await auditLog.append({
+        action: "x402-test-payment",
+        status: "attempt",
+        request: auditRequest(body, {
+          role: "customer",
+          customerId: readOptionalString(body, "customerId"),
+          keyId: readOptionalString(body, "idempotencyKey")
+        })
+      });
+
+      if (paymentResult.type === "payment-error") {
+        sendInstructions(response, paymentResult.response);
+        return;
+      }
+
+      if (paymentResult.type !== "payment-verified") {
+        throw new HttpError(500, "x402 test payment route did not require payment.");
+      }
+
+      const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
+      const settlement = await resourceServer.processSettlement(
+        paymentResult.paymentPayload,
+        paymentResult.paymentRequirements,
+        paymentResult.declaredExtensions,
+        {
+          request: context,
+          responseBody: Buffer.from("{}"),
+          responseHeaders: {}
+        }
+      );
+
+      if (!settlement.success) {
+        await auditLog.append({
+          action: "x402-test-payment",
+          status: "failure",
+          request: auditRequest(body, {
+            role: "customer",
+            customerId: readOptionalString(body, "customerId"),
+            keyId: readOptionalString(body, "idempotencyKey")
+          }),
+          result: {
+            x402Payer: verifiedPaymentPayer,
+            error: settlement.errorMessage ?? settlement.errorReason
+          }
+        });
+        sendInstructions(response, settlement.response);
+        return;
+      }
+
+      const customerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
+      await auditLog.append({
+        action: "x402-test-payment",
+        status: "success",
+        request: auditRequest(body, {
+          role: "customer",
+          customerId,
+          keyId: readOptionalString(body, "idempotencyKey")
+        }),
+        result: {
+          x402Payer: verifiedPaymentPayer,
+          transaction: settlement.transaction,
+          amount: settlement.requirements.amount,
+          asset: settlement.requirements.asset,
+          network: settlement.requirements.network
+        }
+      });
+
+      sendJson(
+        response,
+        200,
+        {
+          agent: "oyira",
+          action: "x402-test-payment",
+          status: "payment_settled",
+          reply: "x402 test payment settled. No domain purchase was attempted.",
+          customerId,
+          x402Payer: verifiedPaymentPayer,
+          payment: {
+            provider: "x402",
+            network: settlement.requirements.network,
+            transaction: settlement.transaction,
+            amount: settlement.requirements.amount,
+            asset: settlement.requirements.asset
+          }
+        },
+        settlement.headers
+      );
       return;
     }
 
@@ -719,6 +817,7 @@ function manifest() {
       customerDomains: "/agent/customer/domains",
       x402Purchases: "/agent/x402/purchases",
       message: "/agent/message",
+      x402TestPayment: "/x402/test-payment",
       x402Purchase: "/x402/domain/purchase",
       actions: {
         createPayment: "/agent/actions/create-payment",
@@ -787,6 +886,7 @@ function manifest() {
     marketplace: {
       mode: "a2mcp-x402",
       endpoint: "/x402/domain/purchase",
+      testEndpoint: "/x402/test-payment",
       requiresCustomerApiKey: false,
       proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
       requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
@@ -905,7 +1005,7 @@ function publicBaseUrl(request: http.IncomingMessage) {
   return `${proto || "https"}://${request.headers.host ?? "asp.oyiradns.xyz"}`;
 }
 
-function assertX402Configured() {
+function assertX402PaymentConfigured() {
   if (!config.x402.enabled) {
     throw new HttpError(404, "x402 purchase endpoint is disabled.");
   }
@@ -917,10 +1017,56 @@ function assertX402Configured() {
   if (!config.okx.apiKey || !config.okx.apiSecret || !config.okx.apiPassphrase) {
     throw new HttpError(503, "OKX facilitator credentials are required before x402 purchases can run.");
   }
+}
 
+function assertX402Configured() {
+  assertX402PaymentConfigured();
   if (config.dynadot.env === "live" && !config.dynadot.allowLivePurchases) {
     throw new HttpError(503, "Live Dynadot purchases are disabled, so x402 domain purchase payment is not being accepted.");
   }
+}
+
+async function getX402TestPaymentServer() {
+  if (!x402TestPaymentServer) {
+    const facilitator = new OKXFacilitatorClient({
+      apiKey: config.okx.apiKey,
+      secretKey: config.okx.apiSecret,
+      passphrase: config.okx.apiPassphrase,
+      baseUrl: config.okx.baseUrl,
+      syncSettle: config.x402.syncSettle
+    });
+    const x402Network = config.x402.network as `${string}:${string}`;
+    const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
+    const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
+      "POST /x402/test-payment": {
+        accepts: {
+          scheme: "exact",
+          network: x402Network,
+          payTo: config.x402.payTo,
+          price: `$${config.x402.testPaymentAmount}`,
+          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
+        },
+        description: "Settle a small x402 payment through Oyira without registering a domain.",
+        mimeType: "application/json",
+        unpaidResponseBody: () => ({
+          contentType: "application/json",
+          body: {
+            error: "payment_required",
+            testPayment: {
+              amount: config.x402.testPaymentAmount,
+              currency: "USD",
+              network: config.x402.network,
+              payTo: config.x402.payTo
+            },
+            safeguards: ["This endpoint verifies x402 settlement only.", "No Dynadot purchase or domain registration is attempted."]
+          }
+        })
+      }
+    });
+    x402TestPaymentServer = httpResourceServer.initialize().then(() => httpResourceServer);
+  }
+
+  return x402TestPaymentServer;
 }
 
 async function getX402PurchaseServer() {
@@ -1487,6 +1633,7 @@ function readyReport() {
     check("okx.statusPath", Boolean(config.okx.statusPath), "OKX payment status path is configured."),
     check("x402.payTo", Boolean(config.x402.payTo), "x402 pay-to wallet is configured."),
     check("x402.network", Boolean(config.x402.network), "x402 network is configured."),
+    check("x402.testPaymentAmount", Boolean(config.x402.testPaymentAmount), "x402 test payment amount is configured."),
     check("stores.x402Purchases", Boolean(config.x402.purchaseStorePath), "x402 purchase store path is configured."),
     check("stores.quotes", Boolean(config.quotes.storePath), "Quote store path is configured."),
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),

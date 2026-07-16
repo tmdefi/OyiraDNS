@@ -938,7 +938,7 @@ function manifest() {
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
       publicSearch: "/public/domain-check",
       publicBrandDiscovery: "/agent/brand-discovery",
-      marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 payment verification is the proof rail."
+      marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 settlement uses USD₮0 on X Layer."
     },
     marketplace: {
       mode: "a2mcp-x402",
@@ -946,14 +946,20 @@ function manifest() {
       testEndpoint: "/x402/test-payment",
       requiresCustomerApiKey: false,
       proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
-      requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
+      requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"],
+      rail: {
+        network: "X Layer",
+        chainId: 196,
+        asset: "USD₮0"
+      }
     },
     publicAgentFlow: [
       "GET /agent/manifest first.",
       "Use POST /public/domain-check for availability and pricing without any token.",
       "Use POST /agent/brand-discovery for brandable name ideas and live TLD checks without any token.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
-      "No owner token is needed for the x402 marketplace flow."
+      "No owner token is needed for the x402 marketplace flow.",
+      "Public x402 payments use USD₮0 on X Layer."
     ],
     safety: [
       "Quote before payment.",
@@ -1048,7 +1054,10 @@ async function publicDomainCheck(body: Record<string, unknown>) {
       available: result.available,
       registrationPrice: result.registrationPrice,
       pricingWarning: result.pricingWarning,
-      tldPrice: result.tldPrice
+      tldPrice: result.tldPrice,
+      paymentRail: "X Layer",
+      paymentAsset: config.quotes.paymentSymbol,
+      chainId: 196
     };
   }
 
@@ -1065,6 +1074,9 @@ async function publicDomainCheck(body: Record<string, unknown>) {
     name: variants.name,
     currency: variants.currency,
     tlds: variants.tlds,
+    paymentRail: "X Layer",
+    paymentAsset: config.quotes.paymentSymbol,
+    chainId: 196,
     suggestions: variants.results.map((entry) => ({
       domainName: entry.domainName,
       available: entry.ok ? entry.available : null,

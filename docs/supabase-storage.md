@@ -45,4 +45,4 @@ Use `POST /agent/x402/purchase-readiness` to check live-purchase readiness befor
 
 Use `POST /agent/brand-discovery` to generate brandable base-name ideas and check configured TLD availability/pricing in real time. This endpoint is public, safe, and never creates payment or registration.
 
-Public agents should start with `GET /agent/manifest`, then use `POST /public/domain-check`, `POST /agent/brand-discovery`, and `POST /x402/domain/purchase`. No owner token is required for any public path.
+Public agents should start with `GET /agent/manifest`, then use `POST /public/domain-check`, `POST /agent/brand-discovery`, and `POST /x402/domain/purchase`. No owner token is required for any public path. Public x402 payments use `USD₮0` on X Layer (chain 196).

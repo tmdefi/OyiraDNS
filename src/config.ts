@@ -225,7 +225,7 @@ export function loadConfig(): ServiceConfig {
       storePath: readEnv("QUOTE_STORE_PATH", "data/domain-quotes.json"),
       ttlSeconds: Number(readEnv("QUOTE_TTL_SECONDS", "1500")),
       defaultCurrency: readEnv("QUOTE_DEFAULT_CURRENCY", "USD"),
-      paymentSymbol: readEnv("QUOTE_PAYMENT_SYMBOL", readEnv("OKX_PAYMENT_SYMBOL", "USDC")),
+      paymentSymbol: readEnv("QUOTE_PAYMENT_SYMBOL", readEnv("OKX_PAYMENT_SYMBOL", "USD₮0")),
       serviceFeeAmount: readEnv("QUOTE_SERVICE_FEE_AMOUNT", readEnv("SERVICE_FEE_AMOUNT", "0")),
       defaultTlds: parseCsv(readEnv("DOMAIN_SEARCH_DEFAULT_TLDS", "com,xyz,net,org,io,co"))
     }

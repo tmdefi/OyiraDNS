@@ -1595,7 +1595,7 @@ async function assertDynadotAccountCanCoverQuote(quote: DomainQuote) {
   }
 
   if (balance < registrationCost) {
-    throw new HttpError(503, "This purchase cannot proceed at this time because available funds are insufficient.");
+    throw new HttpError(503, "This purchase cannot proceed at this time because OyiraDNS available funds are insufficient.");
   }
 }
 

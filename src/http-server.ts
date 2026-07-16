@@ -212,7 +212,6 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/agent/brand-discovery") {
-      await assertAuthorized(request);
       const body = await readJsonBody<Record<string, unknown>>(request);
       sendJson(response, 200, await discoverBrandDomains(body));
       return;
@@ -938,6 +937,7 @@ function manifest() {
       userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
       publicSearch: "/public/domain-check",
+      publicBrandDiscovery: "/agent/brand-discovery",
       marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 payment verification is the proof rail."
     },
     marketplace: {
@@ -951,7 +951,7 @@ function manifest() {
     publicAgentFlow: [
       "GET /agent/manifest first.",
       "Use POST /public/domain-check for availability and pricing without any token.",
-      "Use quote and search endpoints to find a domain and price.",
+      "Use POST /agent/brand-discovery for brandable name ideas and live TLD checks without any token.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
       "No owner token is needed for the x402 marketplace flow."
     ],

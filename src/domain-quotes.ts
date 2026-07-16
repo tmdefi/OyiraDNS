@@ -27,6 +27,17 @@ export interface DomainQuote {
   updatedAt: string;
 }
 
+export interface DomainAvailabilityCheck {
+  domainName: string;
+  years: number;
+  currency: string;
+  available: boolean | null;
+  registrationPrice: string | null;
+  tldPrice: unknown;
+  pricingWarning?: string;
+  availability: unknown;
+}
+
 export class DomainUnavailableError extends Error {
   constructor(readonly domainName: string) {
     super(`Domain ${domainName} is not available.`);
@@ -112,6 +123,40 @@ export class DomainQuoteService {
     await this.writeStore(store);
 
     return quote;
+  }
+
+  async inspectDomain(input: { domainName: string; years?: number; currency?: string }) {
+    const domainName = this.normalizeDomain(input.domainName);
+    const years = input.years ?? 1;
+    const currency = input.currency ?? this.config.defaultCurrency;
+    const availability = await this.dynadot.searchDomain(domainName, { showPrice: true, currency });
+    const available = this.extractAvailability(availability);
+    const tld = domainName.includes(".") ? domainName.split(".").at(-1) ?? domainName : domainName;
+
+    let registrationPrice: string | null = this.extractRegistrationPrice(availability, years);
+    let tldPrice: unknown = null;
+    let pricingWarning: string | undefined;
+
+    try {
+      tldPrice = await this.dynadot.getTldPrice(tld, currency);
+    } catch (error) {
+      pricingWarning = error instanceof Error ? error.message : String(error);
+    }
+
+    if (registrationPrice === "") {
+      registrationPrice = null;
+    }
+
+    return {
+      domainName,
+      years,
+      currency,
+      available,
+      registrationPrice,
+      tldPrice,
+      pricingWarning,
+      availability
+    } satisfies DomainAvailabilityCheck;
   }
 
   async searchVariants(input: { name: string; tlds?: string[]; currency?: string; showPrice?: boolean }) {

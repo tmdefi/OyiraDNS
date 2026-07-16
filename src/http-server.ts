@@ -91,6 +91,12 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/public/domain-check") {
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      sendJson(response, 200, await publicDomainCheck(body));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/agent/customer/domains") {
       const principal = await assertAuthorized(request);
       const requestedCustomerId = url.searchParams.get("customerId") ?? undefined;
@@ -931,6 +937,7 @@ function manifest() {
       signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
       userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
+      publicSearch: "/public/domain-check",
       marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 payment verification is the proof rail."
     },
     marketplace: {
@@ -943,6 +950,7 @@ function manifest() {
     },
     publicAgentFlow: [
       "GET /agent/manifest first.",
+      "Use POST /public/domain-check for availability and pricing without any token.",
       "Use quote and search endpoints to find a domain and price.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
       "No owner token is needed for the x402 marketplace flow."
@@ -1014,6 +1022,56 @@ async function discoverBrandDomains(body: Record<string, unknown>) {
     tlds: tlds ?? config.quotes.defaultTlds,
     count: checked.length,
     suggestions: checked
+  };
+}
+
+async function publicDomainCheck(body: Record<string, unknown>) {
+  const rawDomain = readOptionalString(body, "domainName") ?? readOptionalString(body, "domain") ?? readOptionalString(body, "name");
+  if (!rawDomain) {
+    throw new HttpError(400, "Provide domainName, domain, or name.");
+  }
+
+  const currency = readOptionalString(body, "currency") ?? config.quotes.defaultCurrency;
+  const years = Math.min(Math.max(readNumber(body, "years", 1), 1), 10);
+  const tlds = readStringArray(body, "tlds")?.slice(0, 8);
+  const normalized = rawDomain.trim().toLowerCase();
+  const hasTld = /\.[a-z]{2,24}$/.test(normalized);
+
+  if (hasTld) {
+    const result = await domainQuotes.inspectDomain({ domainName: normalized, years, currency });
+    return {
+      agent: "oyira",
+      action: "public-domain-check",
+      domainName: result.domainName,
+      years: result.years,
+      currency: result.currency,
+      available: result.available,
+      registrationPrice: result.registrationPrice,
+      pricingWarning: result.pricingWarning,
+      tldPrice: result.tldPrice
+    };
+  }
+
+  const variants = await domainQuotes.searchVariants({
+    name: normalized,
+    tlds,
+    currency,
+    showPrice: true
+  });
+
+  return {
+    agent: "oyira",
+    action: "public-domain-check",
+    name: variants.name,
+    currency: variants.currency,
+    tlds: variants.tlds,
+    suggestions: variants.results.map((entry) => ({
+      domainName: entry.domainName,
+      available: entry.ok ? entry.available : null,
+      registrationPrice: entry.ok ? entry.registrationPrice ?? null : null,
+      status: entry.ok ? (entry.available === false ? "unavailable" : "checked") : "check_failed",
+      error: entry.ok ? undefined : entry.error
+    }))
   };
 }
 
@@ -1537,7 +1595,7 @@ async function assertDynadotAccountCanCoverQuote(quote: DomainQuote) {
   }
 
   if (balance < registrationCost) {
-    throw new HttpError(503, "Dynadot account balance is below the registration cost; x402 payment is not being accepted.");
+    throw new HttpError(503, "This purchase cannot proceed at this time because available funds are insufficient.");
   }
 }
 

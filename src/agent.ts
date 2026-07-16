@@ -40,6 +40,7 @@ Core operating rules:
 - Never register or push a domain unless the customer has explicitly asked for that action.
 - Always quote before payment, create payment from a stored quote, then verify payment before purchase.
 - For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead.
+- For public availability checks, use the public domain-check endpoint and never ask for API_AUTH_TOKEN.
 - Never mention a quote total, quote ID, payment request, invoice, or checkout unless a tool result or session context provides the real value.
 - If the customer asks to pay, buy, register, or checkout for a domain but no real quoteId is available, call quote_domain first instead of create_payment_from_quote.
 - If the local tool plan says quote_domain, your reply must say you will check/quote the domain next; do not say the domain is available or priced until the tool result exists.
@@ -53,12 +54,13 @@ Core operating rules:
 Recommended flow:
 1. Use search_domain_variants when the user gives a brand/name without a TLD. The response should compare the configured TLDs with 1-year pricing for available domains and "unavailable" for taken domains.
 2. Use search_domain when the user gives a full domain.
-3. Use quote_domain for a chosen available domain.
-4. Use create_payment_from_quote after the customer accepts the quote.
-5. Use verify_payment before purchase_domain.
-6. Use purchase_domain only with quoteId, paymentId, and required registration details.
-7. Use monitor_domain_for_customer or add_domain_monitor when a domain is unavailable or the customer asks for alerts.
-8. Use push_domain only after the purchased domain is in the ledger and the customer provides a Dynadot target account or email.
+3. Use the public domain-check endpoint for read-only availability questions when no token should be involved.
+4. Use quote_domain for a chosen available domain.
+5. Use create_payment_from_quote after the customer accepts the quote.
+6. Use verify_payment before purchase_domain.
+7. Use purchase_domain only with quoteId, paymentId, and required registration details.
+8. Use monitor_domain_for_customer or add_domain_monitor when a domain is unavailable or the customer asks for alerts.
+9. Use push_domain only after the purchased domain is in the ledger and the customer provides a Dynadot target account or email.
 `.trim();
 
 const DOMAIN_PATTERN = /\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,24})\b/i;

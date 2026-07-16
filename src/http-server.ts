@@ -926,7 +926,8 @@ function manifest() {
       }
     ],
     auth: {
-      schemes: ["Authorization: Bearer <token>", "x-api-auth-token: <token>"],
+      publicMarketplace: "No owner token or customer API key is required for x402 public marketplace calls.",
+      adminSchemes: ["Authorization: Bearer <owner-token>", "x-api-auth-token: <owner-token>"],
       signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
       userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",

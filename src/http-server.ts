@@ -1542,16 +1542,16 @@ async function x402PurchaseReadiness(body: Record<string, unknown>) {
   if (quote && !isQuoteExpired(quote)) {
     try {
       await assertDynadotAccountCanCoverQuote(quote);
-      checks.push({ name: "dynadot.balance", ok: true, message: "Dynadot account balance covers the registration cost." });
+      checks.push({ name: "balance", ok: true, message: "Available balance covers the registration cost." });
     } catch (error) {
       checks.push({
-        name: "dynadot.balance",
+        name: "balance",
         ok: false,
         message: error instanceof Error ? error.message : String(error)
       });
     }
   } else {
-    checks.push({ name: "dynadot.balance", ok: false, message: "Dynadot balance check requires a fresh quote." });
+    checks.push({ name: "balance", ok: false, message: "Balance check requires a fresh quote." });
   }
 
   return {
@@ -1587,11 +1587,11 @@ async function assertDynadotAccountCanCoverQuote(quote: DomainQuote) {
   const registrationCost = Number(quote.dynadotCost);
 
   if (!Number.isFinite(registrationCost) || registrationCost <= 0) {
-    throw new HttpError(503, "Could not verify Dynadot registration cost before payment; x402 payment is not being accepted.");
+    throw new HttpError(503, "Could not verify the registration cost before payment; x402 payment is not being accepted.");
   }
 
   if (balance === null) {
-    throw new HttpError(503, "Could not verify Dynadot account balance before payment; x402 payment is not being accepted.");
+    throw new HttpError(503, "Could not verify the available balance before payment; x402 payment is not being accepted.");
   }
 
   if (balance < registrationCost) {

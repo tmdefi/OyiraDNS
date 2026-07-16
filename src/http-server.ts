@@ -930,7 +930,7 @@ function manifest() {
       signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
       userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
-      marketplace: "OKX.AI marketplace calls should use /x402/domain/purchase. No customer API key is required; x402 payment verification is the proof rail."
+      marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 payment verification is the proof rail."
     },
     marketplace: {
       mode: "a2mcp-x402",

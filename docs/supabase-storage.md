@@ -44,3 +44,5 @@ For x402 purchase safety, unpaid purchase challenges are stored with `status: "c
 Use `POST /agent/x402/purchase-readiness` to check live-purchase readiness before attempting x402 payment. It validates registration contact shape, quote freshness, Dynadot balance coverage, durable x402 storage, and the live-purchase flag.
 
 Use `POST /agent/brand-discovery` to generate brandable base-name ideas and check configured TLD availability/pricing in real time. This endpoint is safe: it only searches domains and never creates payment or registration.
+
+Public agents should start with `GET /agent/manifest`, then use the listed quote/search actions and `POST /x402/domain/purchase` for the marketplace payment-proof flow. No owner token is required for x402 public usage.

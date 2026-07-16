@@ -940,6 +940,12 @@ function manifest() {
       proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
       requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"]
     },
+    publicAgentFlow: [
+      "GET /agent/manifest first.",
+      "Use quote and search endpoints to find a domain and price.",
+      "Use /x402/domain/purchase for public marketplace payment proof.",
+      "No owner token is needed for the x402 marketplace flow."
+    ],
     safety: [
       "Quote before payment.",
       "Verify payment before registration.",

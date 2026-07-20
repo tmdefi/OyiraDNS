@@ -45,4 +45,6 @@ Use `POST /agent/x402/purchase-readiness` to check live-purchase readiness befor
 
 Use `POST /agent/brand-discovery` to generate brandable base-name ideas and check configured TLD availability/pricing in real time. This endpoint is public, safe, and never creates payment or registration.
 
+Public clients should call these endpoints through a structured HTTP client or tool, send JSON request bodies, and parse JSON responses directly. Avoid shell pipelines such as `curl | python` and avoid decorative emoji in inline scripts. For a brand-only request such as `BondiBark`, use `POST /agent/brand-discovery` first or explicitly state the default TLD assumption before normalizing it to a full domain such as `bondibark.xyz` for a 10-year quote.
+
 Public agents should start with `GET /agent/manifest`, then use `POST /public/domain-check`, `POST /agent/brand-discovery`, and `POST /x402/domain/purchase`. No owner token is required for any public path. Public x402 payments use `USD₮0` on X Layer (chain 196).

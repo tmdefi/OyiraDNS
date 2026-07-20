@@ -938,7 +938,7 @@ function manifest() {
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
       publicSearch: "/public/domain-check",
       publicBrandDiscovery: "/agent/brand-discovery",
-      marketplace: "OKX.AI and other public marketplace calls should use /x402/domain/purchase. No customer API key or owner token is required; x402 settlement uses USD₮0 on X Layer."
+      marketplace: "OKX.AI and other public marketplace calls should use structured HTTP clients, send JSON, parse JSON responses directly, and avoid shell pipelines. Use /agent/brand-discovery before quoting brand-only names, or explicitly state any default TLD before calling /x402/domain/purchase. No customer API key or owner token is required; x402 settlement uses USD₮0 on X Layer."
     },
     marketplace: {
       mode: "a2mcp-x402",
@@ -957,6 +957,8 @@ function manifest() {
       "GET /agent/manifest first.",
       "Use POST /public/domain-check for availability and pricing without any token.",
       "Use POST /agent/brand-discovery for brandable name ideas and live TLD checks without any token.",
+      "For brand-only requests, use /agent/brand-discovery first or explicitly normalize the brand to a full domain before quoting.",
+      "Call endpoints through a structured HTTP client/tool, send JSON, and parse JSON directly; do not pipe endpoint output into an interpreter.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
       "No owner token is needed for the x402 marketplace flow.",
       "Public x402 payments use USD₮0 on X Layer."

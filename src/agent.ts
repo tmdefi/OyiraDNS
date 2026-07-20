@@ -42,6 +42,8 @@ Core operating rules:
 - For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead.
 - For public availability checks, use the public domain-check endpoint and never ask for API_AUTH_TOKEN.
 - For public brand discovery, use the brand-discovery endpoint and never ask for API_AUTH_TOKEN.
+- Public clients should call HTTP endpoints through structured HTTP clients or tools and parse JSON directly. Do not suggest shell pipelines such as curl piped to an interpreter, and avoid decorative emoji in inline scripts.
+- When a customer gives a brand name without a TLD, use brand discovery or search variants first. Only append a default TLD such as .xyz when that assumption is explicit in the context or clearly stated to the customer.
 - Never mention a quote total, quote ID, payment request, invoice, or checkout unless a tool result or session context provides the real value.
 - If the customer asks to pay, buy, register, or checkout for a domain but no real quoteId is available, call quote_domain first instead of create_payment_from_quote.
 - If the local tool plan says quote_domain, your reply must say you will check/quote the domain next; do not say the domain is available or priced until the tool result exists.
@@ -56,7 +58,7 @@ Recommended flow:
 1. Use search_domain_variants when the user gives a brand/name without a TLD. The response should compare the configured TLDs with 1-year pricing for available domains and "unavailable" for taken domains.
 2. Use search_domain when the user gives a full domain.
 3. Use the public domain-check endpoint for read-only availability questions when no token should be involved.
-4. Use brand-discovery for brandable name ideas and live TLD checks.
+4. Use brand-discovery for brandable name ideas and live TLD checks before quoting a brand-only request.
 5. Use quote_domain for a chosen available domain.
 6. Use create_payment_from_quote after the customer accepts the quote.
 7. Use verify_payment before purchase_domain.
@@ -269,15 +271,30 @@ function extractBaseName(text: string, domainName?: string) {
     return undefined;
   }
 
-  const candidates = text
+  const normalizedText = text
     .toLowerCase()
     .replace(/https?:\/\//g, " ")
-    .replace(/[^a-z0-9-]+/g, " ")
+    .replace(/[^a-z0-9-]+/g, " ");
+  const leadingBrand = normalizedText.match(/^\s*([a-z0-9][a-z0-9-]{1,62})\s+(?:is|looks|seems|sounds)\b/)?.[1];
+
+  if (leadingBrand && isBaseNameCandidate(leadingBrand)) {
+    return leadingBrand;
+  }
+
+  const candidates = normalizedText
     .split(/\s+/)
     .filter(Boolean)
-    .filter((word) => !STOP_WORDS.has(word) && /[a-z]/.test(word));
+    .filter(isBaseNameCandidate);
 
   return candidates.at(-1);
+}
+
+function isBaseNameCandidate(word: string) {
+  return !STOP_WORDS.has(word) && /[a-z]/.test(word) && !isDurationToken(word);
+}
+
+function isDurationToken(word: string) {
+  return /^(?:[1-9]|10)(?:year|years|yr|yrs)$/.test(word);
 }
 
 function matchValue(text: string, pattern: RegExp) {
@@ -338,10 +355,13 @@ const STOP_WORDS = new Set([
   "an",
   "and",
   "available",
+  "be",
   "buy",
   "can",
+  "catchy",
   "check",
   "cost",
+  "could",
   "domain",
   "find",
   "for",
@@ -351,13 +371,17 @@ const STOP_WORDS = new Set([
   "is",
   "it",
   "lets",
+  "ll",
   "me",
   "monitor",
+  "much",
   "my",
   "name",
   "please",
   "price",
   "purchase",
+  "quite",
+  "quiet",
   "quote",
   "register",
   "search",
@@ -365,5 +389,7 @@ const STOP_WORDS = new Set([
   "status",
   "the",
   "to",
-  "want"
+  "want",
+  "will",
+  "would"
 ]);

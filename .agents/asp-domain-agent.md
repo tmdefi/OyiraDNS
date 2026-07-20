@@ -51,10 +51,13 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Send `sessionId` in message requests to let Oyira remember the last domain, quote, payment, and recent transcript.
 - Responses include a customer-facing `reply`, the raw `decision`, optional `toolExecution`, and a compact session summary.
 - Gated action attempts, successes, and failures are written to the JSONL audit log at `OYIRA_AUDIT_LOG_PATH`.
+- Public HTTP clients should use a structured HTTP client/tool, send JSON bodies, and parse JSON responses directly. Do not pipe endpoint output into interpreters such as `curl | python`.
+- When a user provides only a brand name, call `/agent/brand-discovery` first or explicitly state the default-domain assumption before normalizing, for example `BondiBark` -> `bondibark.xyz`.
 
 ## Safety
 
 - Never request private keys, seed phrases, or payment secrets.
 - Never imply an unavailable domain can be bought.
 - Never skip quote or payment verification.
+- Avoid shell pipelines and decorative emoji in inline scripts when showing operational examples.
 - Treat live registration and domain pushes as high-impact actions requiring explicit customer confirmation.

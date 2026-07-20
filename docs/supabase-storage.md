@@ -47,4 +47,11 @@ Use `POST /agent/brand-discovery` to generate brandable base-name ideas and chec
 
 Public clients should call these endpoints through a structured HTTP client or tool, send JSON request bodies, and parse JSON responses directly. Avoid shell pipelines such as `curl | python` and avoid decorative emoji in inline scripts. For a brand-only request such as `BondiBark`, use `POST /agent/brand-discovery` first or explicitly state the default TLD assumption before normalizing it to a full domain such as `bondibark.xyz` for a 10-year quote.
 
+For domain purchases, collect the user's own real registration details before payment: `registrantName`, `email`, `phone`, `address`, `city`, `country`, and `postalCode`. `phoneCountryCode`, `state`, and `organization` are optional. `zipCode` is accepted as an alias for `postalCode`; masked placeholders such as `+141****0100` are rejected.
+
+Successful x402 domain purchases return customerAccess.customerId and a one-time customerAccess.apiKey. Store that key and send it as Authorization: Bearer <apiKey> for future DNS, nameserver, project-link, and domain-management actions. Buying agents should never ask customers for API_AUTH_TOKEN; that is the Railway owner/admin token.
+
 Public agents should start with `GET /agent/manifest`, then use `POST /public/domain-check`, `POST /agent/brand-discovery`, and `POST /x402/domain/purchase`. No owner token is required for any public path. Public x402 payments use `USD₮0` on X Layer (chain 196).
+
+
+

@@ -452,6 +452,11 @@ const server = http.createServer(async (request, response) => {
         customerId: settledCustomerId,
         x402Payer: verifiedPaymentPayer
       });
+      const customerAccess = await userApiKeys.createKey({
+        customerId: settledCustomerId,
+        keyId: `x402_${quote.domainName}_${Date.now()}`,
+        label: `x402 purchase access for ${quote.domainName}`
+      });
       await auditLog.append({
         action: "x402-domain-purchase",
         status: "success",
@@ -487,6 +492,14 @@ const server = http.createServer(async (request, response) => {
             x402Payer: verifiedPaymentPayer
           },
           x402Payer: verifiedPaymentPayer,
+          customerAccess: {
+            customerId: customerAccess.key.customerId,
+            keyId: customerAccess.key.keyId,
+            apiKey: customerAccess.token,
+            tokenType: "Bearer",
+            usage: "Use this as Authorization: Bearer <apiKey> for future DNS, nameserver, project-link, and domain-management actions on domains owned by this customer.",
+            warning: "Store this API key now. Oyira only shows it once. Do not share it with agents you do not trust."
+          },
           registration,
           ledgerRecord
         },
@@ -931,22 +944,28 @@ function manifest() {
       }
     ],
     auth: {
-      publicMarketplace: "No owner token or customer API key is required for x402 public marketplace calls.",
+      publicMarketplace: "No owner token or customer API key is required to buy with x402. A successful first x402 domain purchase returns a one-time customerAccess.apiKey for future owner-scoped domain changes.",
       adminSchemes: ["Authorization: Bearer <owner-token>", "x-api-auth-token: <owner-token>"],
       signup: config.auth.publicSignupEnabled ? "/auth/signup" : "disabled",
-      userApiKeys: "Customer API keys are for direct/admin-controlled flows. Optional env keys can be set as customerId:token or customerId:token:keyId entries.",
+      userApiKeys: "Customer API keys authenticate future DNS, nameserver, project-link, and domain-management actions. x402 purchase responses include customerAccess.apiKey; optional env keys can also be set as customerId:token or customerId:token:keyId entries.",
       ownerToken: "API_AUTH_TOKEN remains accepted for owner/admin access.",
       publicSearch: "/public/domain-check",
       publicBrandDiscovery: "/agent/brand-discovery",
-      marketplace: "OKX.AI and other public marketplace calls should use structured HTTP clients, send JSON, parse JSON responses directly, and avoid shell pipelines. Use /agent/brand-discovery before quoting brand-only names, or explicitly state any default TLD before calling /x402/domain/purchase. No customer API key or owner token is required; x402 settlement uses USD₮0 on X Layer."
+      marketplace: "OKX.AI and other public marketplace calls should use structured HTTP clients, send JSON, parse JSON responses directly, and avoid shell pipelines. Use /agent/brand-discovery before quoting brand-only names, or explicitly state any default TLD before calling /x402/domain/purchase. No owner token is required for x402 purchase; after purchase, use the returned customerAccess.apiKey for DNS and project-link changes."
     },
     marketplace: {
       mode: "a2mcp-x402",
       endpoint: "/x402/domain/purchase",
       testEndpoint: "/x402/test-payment",
       requiresCustomerApiKey: false,
+      returnsCustomerAccessOnPurchase: true,
       proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
       requiredRequestFields: ["idempotencyKey", "domainName", "years", "registrationContact"],
+      registrationContactFields: {
+        required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"],
+        optional: ["phoneCountryCode", "state", "organization", "zipCode"],
+        note: "Collect the user's own real registration details before payment. zipCode is accepted as an alias for postalCode. Masked placeholders are rejected."
+      },
       rail: {
         network: "X Layer",
         chainId: 196,
@@ -960,7 +979,8 @@ function manifest() {
       "For brand-only requests, use /agent/brand-discovery first or explicitly normalize the brand to a full domain before quoting.",
       "Call endpoints through a structured HTTP client/tool, send JSON, and parse JSON directly; do not pipe endpoint output into an interpreter.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
-      "No owner token is needed for the x402 marketplace flow.",
+      "After a successful x402 purchase, store customerAccess.apiKey and use it as Authorization: Bearer <apiKey> for DNS, nameserver, and project-link actions.",
+      "Do not ask customers for API_AUTH_TOKEN; that is the owner/admin token. Use customerAccess.apiKey for purchased-domain changes.",
       "Public x402 payments use USD₮0 on X Layer."
     ],
     safety: [
@@ -1928,7 +1948,17 @@ function readRegistrationContact(body: Record<string, unknown>): RegistrationCon
     return undefined;
   }
 
-  return value as RegistrationContact;
+  const contact = value as RegistrationContact & { zipCode?: unknown };
+  const postalCode = typeof contact.postalCode === "string" && contact.postalCode.trim()
+    ? contact.postalCode
+    : typeof contact.zipCode === "string" && contact.zipCode.trim()
+      ? contact.zipCode
+      : undefined;
+
+  return {
+    ...contact,
+    postalCode
+  };
 }
 
 function readRequiredRegistrationContact(body: Record<string, unknown>): RegistrationContact {
@@ -1941,6 +1971,12 @@ function readRequiredRegistrationContact(body: Record<string, unknown>): Registr
   for (const key of ["registrantName", "email", "phone", "address", "city", "country", "postalCode"] as const) {
     if (typeof contact[key] !== "string" || !contact[key]?.trim()) {
       throw new HttpError(400, `Missing required registrationContact field: ${key}.`);
+    }
+  }
+
+  for (const key of ["registrantName", "email", "phone", "address", "city", "country", "postalCode"] as const) {
+    if (contact[key]?.includes("*")) {
+      throw new HttpError(400, `registrationContact.${key} must be the user's real registration detail, not a masked placeholder.`);
     }
   }
 
@@ -2143,6 +2179,7 @@ async function readyReport() {
     dynadotEnv: config.dynadot.env,
     marketplaceMode: "a2mcp-x402",
     marketplaceRequiresCustomerApiKey: false,
+    returnsCustomerAccessOnPurchase: true,
     storageMode: database.enabled ? "postgres" : "file",
     livePurchasesEnabled: config.dynadot.allowLivePurchases,
     domainPushesEnabled: config.dynadot.allowDomainPushes,
@@ -2169,3 +2206,9 @@ class HttpError extends Error {
     super(message);
   }
 }
+
+
+
+
+
+

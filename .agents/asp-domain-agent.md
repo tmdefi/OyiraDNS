@@ -26,7 +26,8 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Create a quote with `quote_domain` before asking for payment.
 - Create payment only with `create_payment_from_quote`.
 - Verify payment with `verify_payment` before `purchase_domain`.
-- Register with `purchase_domain` only when `quoteId`, `paymentId`, registration contact, and explicit customer intent are present.
+- Register with `purchase_domain` only when `quoteId`, `paymentId`, the user-provided registration contact, and explicit customer intent are present.
+- Registration contact must come from the user and include `registrantName`, `email`, `phone`, `address`, `city`, `country`, and `postalCode`; optional fields are `phoneCountryCode`, `state`, and `organization`. Do not use masked placeholders.
 - Monitor unavailable domains with `monitor_domain_for_customer` or `add_domain_monitor`.
 - Push a domain with `push_domain` only after checking `get_domain_ledger_record`.
 
@@ -45,7 +46,7 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Gated payment verification endpoint: `POST /agent/actions/verify-payment`.
 - Gated purchase endpoint: `POST /agent/actions/purchase-domain`.
 - Gated push endpoint: `POST /agent/actions/push-domain`.
-- If `API_AUTH_TOKEN` is configured, call `POST /agent/message` with `Authorization: Bearer <token>` or `x-api-auth-token`.
+- Never ask public customers for `API_AUTH_TOKEN`; that is the owner/admin token. After a successful x402 purchase, use the returned `customerAccess.apiKey` with `Authorization: Bearer <apiKey>` for DNS, nameserver, project-link, and domain-management actions.
 - Gated action endpoints require `confirm: true`.
 - The HTTP runtime auto-executes low-risk tools only. Payment, purchase, nameserver, and push actions are returned as gated next steps or handled by the gated endpoints.
 - Send `sessionId` in message requests to let Oyira remember the last domain, quote, payment, and recent transcript.
@@ -61,3 +62,6 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Never skip quote or payment verification.
 - Avoid shell pipelines and decorative emoji in inline scripts when showing operational examples.
 - Treat live registration and domain pushes as high-impact actions requiring explicit customer confirmation.
+
+
+

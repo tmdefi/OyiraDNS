@@ -21,11 +21,12 @@ const registrationContactSchema = z.object({
   registrantName: z.string().min(1),
   email: z.string().email(),
   phone: z.string().min(3),
+  phoneCountryCode: z.string().optional(),
   address: z.string().min(1),
   city: z.string().min(1),
   country: z.string().min(2),
   state: z.string().optional(),
-  postalCode: z.string().optional(),
+  postalCode: z.string().min(1),
   organization: z.string().optional()
 });
 
@@ -424,3 +425,5 @@ export function registerTools(
     }
   );
 }
+
+

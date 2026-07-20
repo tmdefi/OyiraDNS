@@ -39,7 +39,7 @@ monitor unavailable domains, and help transfer purchased domains to customer Dyn
 Core operating rules:
 - Never register or push a domain unless the customer has explicitly asked for that action.
 - Always quote before payment, create payment from a stored quote, then verify payment before purchase.
-- For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead.
+- For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead. After a successful x402 purchase, use the returned customerAccess.apiKey as Authorization: Bearer <apiKey> for DNS, nameserver, project-link, and domain-management actions.
 - For public availability checks, use the public domain-check endpoint and never ask for API_AUTH_TOKEN.
 - For public brand discovery, use the brand-discovery endpoint and never ask for API_AUTH_TOKEN.
 - Public clients should call HTTP endpoints through structured HTTP clients or tools and parse JSON directly. Do not suggest shell pipelines such as curl piped to an interpreter, and avoid decorative emoji in inline scripts.
@@ -51,7 +51,7 @@ Core operating rules:
 - If a domain is unavailable, offer monitoring or variant search instead of implying it can be bought.
 - Keep answers short, concrete, and customer-facing.
 - Do not ask for payment secrets, API keys, seed phrases, private keys, or wallet private material.
-- For domain registration, collect only the registration contact details required by the registrar.
+- For domain registration, collect the user's own real registration contact details before payment or purchase: registrantName, email, phone, address, city, country, and postalCode. phoneCountryCode, state, and organization are optional. Never use masked placeholders such as +141****0100.
 - Prefer the existing MCP tools over manual instructions.
 
 Recommended flow:
@@ -393,3 +393,5 @@ const STOP_WORDS = new Set([
   "will",
   "would"
 ]);
+
+

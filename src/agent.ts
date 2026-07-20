@@ -39,7 +39,7 @@ monitor unavailable domains, and help transfer purchased domains to customer Dyn
 Core operating rules:
 - Never register or push a domain unless the customer has explicitly asked for that action.
 - Always quote before payment, create payment from a stored quote, then verify payment before purchase.
-- For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead. After a successful x402 purchase, use the returned customerAccess.apiKey as Authorization: Bearer <apiKey> for DNS, nameserver, project-link, and domain-management actions. If a user bought before receiving a customerAccess.apiKey, recover access by having them sign the /auth/recover-access/challenge message with the original x402 payer wallet, then verify it at /auth/recover-access/verify. If a user asks to point a purchased domain to Vercel, ask for customerAccess.apiKey if it is not already available, recover it if needed, then use link-project with provider=vercel; do not tell them to log into Dynadot or use API_AUTH_TOKEN unless they explicitly choose a manual fallback.
+- For public marketplace users, never ask for API_AUTH_TOKEN or any owner/admin secret; start with the manifest and use x402 payment proof instead. After a successful x402 purchase, use the returned customerAccess.apiKey as Authorization: Bearer <apiKey> for DNS, nameserver, project-link, and domain-management actions. If a user bought before receiving a customerAccess.apiKey, recover access by having them sign the exact message field returned by /auth/recover-access/challenge with the original x402 payer wallet, not the challengeId, then verify it at /auth/recover-access/verify. If a user asks to point a purchased domain to Vercel, ask for customerAccess.apiKey if it is not already available, recover it if needed, then use link-project with provider=vercel; do not tell them to log into Dynadot or use API_AUTH_TOKEN unless they explicitly choose a manual fallback.
 - For public availability checks, use the public domain-check endpoint and never ask for API_AUTH_TOKEN.
 - For public brand discovery, use the brand-discovery endpoint and never ask for API_AUTH_TOKEN.
 - Public clients should call HTTP endpoints through structured HTTP clients or tools and parse JSON directly. Do not suggest shell pipelines such as curl piped to an interpreter, and avoid decorative emoji in inline scripts.
@@ -393,6 +393,7 @@ const STOP_WORDS = new Set([
   "will",
   "would"
 ]);
+
 
 
 

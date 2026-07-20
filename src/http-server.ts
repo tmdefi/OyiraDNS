@@ -164,7 +164,13 @@ const server = http.createServer(async (request, response) => {
         challengeId: challenge.id,
         message: challenge.message,
         expiresAt: challenge.expiresAt,
-        instructions: "Sign this exact message with the wallet that paid for the x402 domain purchase, then call /auth/recover-access/verify with challengeId and signature."
+        signing: {
+          method: "personal_sign / EIP-191 message signing",
+          payloadField: "message",
+          doNotSign: ["challengeId", "domainName", "a reconstructed message", "JSON with escaped newlines"],
+          newlineFormat: "LF (\\n). Sign the message string exactly as returned."
+        },
+        instructions: "Sign the exact message field with the wallet that paid for the x402 domain purchase. Do not sign challengeId or reconstruct the message. Then call /auth/recover-access/verify with challengeId and signature."
       });
       return;
     }
@@ -1042,7 +1048,7 @@ function manifest() {
           ]
         }
       },
-      agentInstruction: "If the user asks to point a purchased domain to Vercel, ask for their customerAccess.apiKey if it is not already available. If they bought before receiving a key, recover access by asking them to sign the /auth/recover-access/challenge message with the original x402 payer wallet, then verify it at /auth/recover-access/verify. After you have the key, call link-project with provider=vercel. Do not tell them to log into Dynadot or provide API_AUTH_TOKEN unless they explicitly choose a manual fallback."
+      agentInstruction: "If the user asks to point a purchased domain to Vercel, ask for their customerAccess.apiKey if it is not already available. If they bought before receiving a key, recover access by asking them to sign the exact message field returned by /auth/recover-access/challenge with the original x402 payer wallet, not the challengeId, then verify it at /auth/recover-access/verify. After you have the key, call link-project with provider=vercel. Do not tell them to log into Dynadot or provide API_AUTH_TOKEN unless they explicitly choose a manual fallback."
     },
     publicAgentFlow: [
       "GET /agent/manifest first.",
@@ -1052,7 +1058,7 @@ function manifest() {
       "Call endpoints through a structured HTTP client/tool, send JSON, and parse JSON directly; do not pipe endpoint output into an interpreter.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
       "After a successful x402 purchase, store customerAccess.apiKey and use it as Authorization: Bearer <apiKey> for DNS, nameserver, and project-link actions.",
-      "For older purchases without customerAccess.apiKey, call /auth/recover-access/challenge for the domain, have the original x402 payer wallet sign the message, then call /auth/recover-access/verify to issue a customer key.",
+      "For older purchases without customerAccess.apiKey, call /auth/recover-access/challenge for the domain, have the original x402 payer wallet sign the exact message field, not challengeId, then call /auth/recover-access/verify to issue a customer key.",
       "Do not ask customers for API_AUTH_TOKEN; that is the owner/admin token. Use customerAccess.apiKey for purchased-domain changes.",
       "Public x402 payments use USD₮0 on X Layer."
     ],
@@ -2116,7 +2122,7 @@ async function verifyAccessRecoveryChallenge(body: Record<string, unknown>) {
   });
 
   if (!valid) {
-    throw new HttpError(403, "Signature did not match the wallet that paid for this x402 domain purchase.");
+    throw new HttpError(403, "Signature verification failed. Sign the exact message field returned by /auth/recover-access/challenge with the original x402 payer wallet. Do not sign challengeId, do not reconstruct the message, and do not convert newlines or JSON-escape the message.");
   }
 
   accessRecoveryChallenges.delete(challenge.id);
@@ -2379,6 +2385,7 @@ class HttpError extends Error {
     super(message);
   }
 }
+
 
 
 

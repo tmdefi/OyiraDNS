@@ -50,10 +50,11 @@ Public clients should call these endpoints through a structured HTTP client or t
 For domain purchases, collect the user's own real registration details before payment: `registrantName`, `email`, `phone`, `address`, `city`, `country`, and `postalCode`. `phoneCountryCode`, `state`, and `organization` are optional. `zipCode` is accepted as an alias for `postalCode`; masked placeholders such as `+141****0100` are rejected.
 
 Successful x402 domain purchases return customerAccess.customerId and a one-time customerAccess.apiKey. Store that key and send it as Authorization: Bearer <apiKey> for future DNS, nameserver, project-link, and domain-management actions. Buying agents should never ask customers for API_AUTH_TOKEN; that is the Railway owner/admin token.
-For older purchases that did not return `customerAccess.apiKey`, recover access without owner/admin secrets: call `POST /auth/recover-access/challenge` with `{ "domainName": "tmdefi.xyz" }`, ask the user to sign the returned message with the wallet that paid for the x402 purchase, then call `POST /auth/recover-access/verify` with `challengeId` and `signature`. Oyira verifies the signer against the ledger `x402Payer` and returns a new customer API key.
+For older purchases that did not return `customerAccess.apiKey`, recover access without owner/admin secrets: call `POST /auth/recover-access/challenge` with `{ "domainName": "tmdefi.xyz" }`, ask the user to sign the exact returned `message` field with the wallet that paid for the x402 purchase, not `challengeId`, then call `POST /auth/recover-access/verify` with `challengeId` and `signature`. Oyira verifies the signer against the ledger `x402Payer` and returns a new customer API key.
 For Vercel, use `POST /agent/actions/link-project` with `Authorization: Bearer <customerAccess.apiKey>` and body `{ "confirm": true, "domainName": "tmdefi.xyz", "provider": "vercel" }`. If the key is not in context, ask the user for their `customerAccess.apiKey` from the purchase response. Do not ask for Dynadot login or `API_AUTH_TOKEN` unless the user explicitly wants a manual/admin fallback.
 
 Public agents should start with `GET /agent/manifest`, then use `POST /public/domain-check`, `POST /agent/brand-discovery`, and `POST /x402/domain/purchase`. No owner token is required for any public path. Public x402 payments use `USD₮0` on X Layer (chain 196).
+
 
 
 

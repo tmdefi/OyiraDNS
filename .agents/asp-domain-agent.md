@@ -46,7 +46,7 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Gated payment verification endpoint: `POST /agent/actions/verify-payment`.
 - Gated purchase endpoint: `POST /agent/actions/purchase-domain`.
 - Gated push endpoint: `POST /agent/actions/push-domain`.
-- Never ask public customers for `API_AUTH_TOKEN`; that is the owner/admin token. After a successful x402 purchase, use the returned `customerAccess.apiKey` with `Authorization: Bearer <apiKey>` for DNS, nameserver, project-link, and domain-management actions.
+- Never ask public customers for `API_AUTH_TOKEN`; that is the owner/admin token. After a successful x402 purchase, use the returned `customerAccess.apiKey` with `Authorization: Bearer <apiKey>` for DNS, nameserver, project-link, and domain-management actions.`r`n- For Vercel setup on a purchased domain, ask for `customerAccess.apiKey` if it is not already in context, then call `POST /agent/actions/link-project` with `confirm: true`, the domain name, and `provider: "vercel"`. Do not tell the user to log into Dynadot or provide `API_AUTH_TOKEN` unless they explicitly choose a manual/admin fallback.
 - Gated action endpoints require `confirm: true`.
 - The HTTP runtime auto-executes low-risk tools only. Payment, purchase, nameserver, and push actions are returned as gated next steps or handled by the gated endpoints.
 - Send `sessionId` in message requests to let Oyira remember the last domain, quote, payment, and recent transcript.
@@ -62,6 +62,7 @@ Use Gemini through `GeminiClient` in `src/gemini.ts`.
 - Never skip quote or payment verification.
 - Avoid shell pipelines and decorative emoji in inline scripts when showing operational examples.
 - Treat live registration and domain pushes as high-impact actions requiring explicit customer confirmation.
+
 
 
 

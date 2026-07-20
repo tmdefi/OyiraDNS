@@ -972,7 +972,34 @@ function manifest() {
         asset: "USD₮0"
       }
     },
-    publicAgentFlow: [
+    domainManagement: {
+      auth: "Use Authorization: Bearer <customerAccess.apiKey> from the successful x402 purchase response. Never ask public customers for API_AUTH_TOKEN.",
+      ownershipCheck: "Oyira checks the authenticated customer against the domain ledger before changing DNS, nameservers, project links, or pushes.",
+      vercel: {
+        endpoint: "/agent/actions/link-project",
+        method: "POST",
+        headers: ["Authorization: Bearer <customerAccess.apiKey>", "Content-Type: application/json"],
+        bodyExample: {
+          confirm: true,
+          domainName: "tmdefi.xyz",
+          provider: "vercel"
+        }
+      },
+      dnsRecords: {
+        endpoint: "/agent/actions/configure-dns",
+        method: "POST",
+        headers: ["Authorization: Bearer <customerAccess.apiKey>", "Content-Type: application/json"],
+        vercelBodyExample: {
+          confirm: true,
+          domainName: "tmdefi.xyz",
+          records: [
+            { type: "a", name: "@", value: "76.76.21.21" },
+            { type: "cname", name: "www", value: "cname.vercel-dns.com" }
+          ]
+        }
+      },
+      agentInstruction: "If the user asks to point a purchased domain to Vercel, ask for their customerAccess.apiKey if it is not already available, then call link-project with provider=vercel. Do not tell them to log into Dynadot or provide API_AUTH_TOKEN unless they explicitly choose a manual fallback."
+    },    publicAgentFlow: [
       "GET /agent/manifest first.",
       "Use POST /public/domain-check for availability and pricing without any token.",
       "Use POST /agent/brand-discovery for brandable name ideas and live TLD checks without any token.",
@@ -2206,6 +2233,7 @@ class HttpError extends Error {
     super(message);
   }
 }
+
 
 
 

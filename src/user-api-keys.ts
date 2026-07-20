@@ -204,5 +204,6 @@ function secureEqual(left: string, right: string) {
 }
 
 function normalizeId(value: string | undefined) {
-  return value?.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+  return value?.trim().replace(/[^a-zA-Z0-9_:-]/g, "_");
 }
+

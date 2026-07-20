@@ -1,5 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { verifyMessage } from "viem";
 import { OKXFacilitatorClient } from "@okxweb3/x402-core";
 import { x402HTTPResourceServer, type HTTPAdapter, type HTTPRequestContext } from "@okxweb3/x402-core/http";
 import { x402ResourceServer } from "@okxweb3/x402-core/server";
@@ -34,6 +35,16 @@ const x402Purchases = new X402PurchaseStore(config.x402, database);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
 let x402PurchaseServer: Promise<x402HTTPResourceServer> | null = null;
 let x402TestPaymentServer: Promise<x402HTTPResourceServer> | null = null;
+const accessRecoveryChallenges = new Map<string, AccessRecoveryChallenge>();
+
+interface AccessRecoveryChallenge {
+  id: string;
+  domainName: string;
+  customerId: string;
+  x402Payer: `0x${string}`;
+  message: string;
+  expiresAt: string;
+}
 
 interface AuthPrincipal {
   role: "owner" | "customer";
@@ -143,6 +154,36 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/auth/recover-access/challenge") {
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const challenge = await createAccessRecoveryChallenge(body, request);
+      sendJson(response, 200, {
+        agent: "oyira",
+        action: "recover-access-challenge",
+        domainName: challenge.domainName,
+        challengeId: challenge.id,
+        message: challenge.message,
+        expiresAt: challenge.expiresAt,
+        instructions: "Sign this exact message with the wallet that paid for the x402 domain purchase, then call /auth/recover-access/verify with challengeId and signature."
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/auth/recover-access/verify") {
+      const body = await readJsonBody<Record<string, unknown>>(request);
+      const recovered = await verifyAccessRecoveryChallenge(body);
+      sendJson(response, 200, {
+        agent: "oyira",
+        action: "recover-access",
+        customerId: recovered.key.customerId,
+        keyId: recovered.key.keyId,
+        apiKey: recovered.token,
+        tokenType: "Bearer",
+        usage: "Use this as Authorization: Bearer <apiKey> for future DNS, nameserver, project-link, and domain-management actions on domains owned by this customer.",
+        warning: "Store this API key now. Oyira only shows it once. Do not share it with agents you do not trust."
+      });
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/auth/signup") {
       if (!config.auth.publicSignupEnabled) {
         throw new HttpError(404, "Signup is not enabled.");
@@ -853,6 +894,7 @@ const server = http.createServer(async (request, response) => {
 
     sendJson(response, 404, { error: "Not found." });
   } catch (error) {
+    console.error("HTTP request failed", error);
     sendJson(response, error instanceof HttpError ? error.status : 500, {
       error: error instanceof Error ? error.message : String(error)
     });
@@ -878,6 +920,8 @@ function manifest() {
       readiness: "/ready",
       manifest: "/agent/manifest",
       signup: "/auth/signup",
+      recoverAccessChallenge: "/auth/recover-access/challenge",
+      recoverAccessVerify: "/auth/recover-access/verify",
       adminApiKeys: "/admin/api-keys",
       customerDomains: "/agent/customer/domains",
       x402Purchases: "/agent/x402/purchases",
@@ -973,7 +1017,7 @@ function manifest() {
       }
     },
     domainManagement: {
-      auth: "Use Authorization: Bearer <customerAccess.apiKey> from the successful x402 purchase response. Never ask public customers for API_AUTH_TOKEN.",
+      auth: "Use Authorization: Bearer <customerAccess.apiKey> from the successful x402 purchase response. If the user bought before customerAccess existed, use /auth/recover-access/challenge and /auth/recover-access/verify so they can sign with the original x402 payer wallet and receive a new customer key. Never ask public customers for API_AUTH_TOKEN.",
       ownershipCheck: "Oyira checks the authenticated customer against the domain ledger before changing DNS, nameservers, project links, or pushes.",
       vercel: {
         endpoint: "/agent/actions/link-project",
@@ -998,8 +1042,9 @@ function manifest() {
           ]
         }
       },
-      agentInstruction: "If the user asks to point a purchased domain to Vercel, ask for their customerAccess.apiKey if it is not already available, then call link-project with provider=vercel. Do not tell them to log into Dynadot or provide API_AUTH_TOKEN unless they explicitly choose a manual fallback."
-    },    publicAgentFlow: [
+      agentInstruction: "If the user asks to point a purchased domain to Vercel, ask for their customerAccess.apiKey if it is not already available. If they bought before receiving a key, recover access by asking them to sign the /auth/recover-access/challenge message with the original x402 payer wallet, then verify it at /auth/recover-access/verify. After you have the key, call link-project with provider=vercel. Do not tell them to log into Dynadot or provide API_AUTH_TOKEN unless they explicitly choose a manual fallback."
+    },
+    publicAgentFlow: [
       "GET /agent/manifest first.",
       "Use POST /public/domain-check for availability and pricing without any token.",
       "Use POST /agent/brand-discovery for brandable name ideas and live TLD checks without any token.",
@@ -1007,6 +1052,7 @@ function manifest() {
       "Call endpoints through a structured HTTP client/tool, send JSON, and parse JSON directly; do not pipe endpoint output into an interpreter.",
       "Use /x402/domain/purchase for public marketplace payment proof.",
       "After a successful x402 purchase, store customerAccess.apiKey and use it as Authorization: Bearer <apiKey> for DNS, nameserver, and project-link actions.",
+      "For older purchases without customerAccess.apiKey, call /auth/recover-access/challenge for the domain, have the original x402 payer wallet sign the message, then call /auth/recover-access/verify to issue a customer key.",
       "Do not ask customers for API_AUTH_TOKEN; that is the owner/admin token. Use customerAccess.apiKey for purchased-domain changes.",
       "Public x402 payments use USD₮0 on X Layer."
     ],
@@ -2010,6 +2056,106 @@ function readRequiredRegistrationContact(body: Record<string, unknown>): Registr
   return contact;
 }
 
+async function createAccessRecoveryChallenge(body: Record<string, unknown>, request: http.IncomingMessage): Promise<AccessRecoveryChallenge> {
+  cleanupExpiredAccessRecoveryChallenges();
+  const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+  const ledgerRecord = await domainLedger.getRecordByDomain(domainName);
+
+  if (!ledgerRecord || !ledgerRecord.x402Payer) {
+    throw new HttpError(404, `No recoverable x402 purchase ledger record found for ${domainName}.`);
+  }
+
+  const x402Payer = readEvmAddress(ledgerRecord.x402Payer, "ledger x402Payer");
+  const customerId = ledgerRecord.customerId ?? `x402:${x402Payer}`;
+  const id = crypto.randomUUID();
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const message = [
+    "OyiraDNS customer access recovery",
+    `Domain: ${domainName}`,
+    `Customer ID: ${customerId}`,
+    `Wallet: ${x402Payer}`,
+    `Challenge ID: ${id}`,
+    `Nonce: ${nonce}`,
+    `Expires At: ${expiresAt}`,
+    `Origin: ${publicBaseUrl(request)}`,
+    "Only sign this message if you are recovering API access for this purchased domain."
+  ].join("\n");
+  const challenge: AccessRecoveryChallenge = {
+    id,
+    domainName,
+    customerId,
+    x402Payer,
+    message,
+    expiresAt
+  };
+  accessRecoveryChallenges.set(id, challenge);
+
+  return challenge;
+}
+
+async function verifyAccessRecoveryChallenge(body: Record<string, unknown>) {
+  cleanupExpiredAccessRecoveryChallenges();
+  const challengeId = readRequiredString(body, "challengeId");
+  const signature = readHexSignature(readRequiredString(body, "signature"));
+  const challenge = accessRecoveryChallenges.get(challengeId);
+
+  if (!challenge) {
+    throw new HttpError(404, "Access recovery challenge was not found or has expired. Create a fresh challenge.");
+  }
+
+  if (Date.parse(challenge.expiresAt) <= Date.now()) {
+    accessRecoveryChallenges.delete(challenge.id);
+    throw new HttpError(410, "Access recovery challenge expired. Create a fresh challenge.");
+  }
+
+  const valid = await verifyMessage({
+    address: challenge.x402Payer,
+    message: challenge.message,
+    signature
+  });
+
+  if (!valid) {
+    throw new HttpError(403, "Signature did not match the wallet that paid for this x402 domain purchase.");
+  }
+
+  accessRecoveryChallenges.delete(challenge.id);
+  return userApiKeys.createKey({
+    customerId: challenge.customerId,
+    keyId: `recovery_${challenge.domainName}_${Date.now()}`,
+    label: `Recovered access for ${challenge.domainName}`
+  });
+}
+
+function cleanupExpiredAccessRecoveryChallenges() {
+  const now = Date.now();
+
+  for (const [id, challenge] of accessRecoveryChallenges) {
+    if (Date.parse(challenge.expiresAt) <= now) {
+      accessRecoveryChallenges.delete(id);
+    }
+  }
+}
+
+function readEvmAddress(value: string, label: string): `0x${string}` {
+  const normalized = value.trim().toLowerCase();
+
+  if (!/^0x[a-f0-9]{40}$/.test(normalized)) {
+    throw new HttpError(409, `${label} is not an EVM address and cannot be used for wallet-signature recovery.`);
+  }
+
+  return normalized as `0x${string}`;
+}
+
+function readHexSignature(value: string): `0x${string}` {
+  const normalized = value.trim() as `0x${string}`;
+
+  if (!/^0x[a-fA-F0-9]+$/.test(normalized)) {
+    throw new HttpError(400, "signature must be a 0x-prefixed hex string.");
+  }
+
+  return normalized;
+}
 async function updateActionSession(
   body: Record<string, unknown>,
   principal: AuthPrincipal,
@@ -2233,6 +2379,11 @@ class HttpError extends Error {
     super(message);
   }
 }
+
+
+
+
+
 
 
 

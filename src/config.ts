@@ -34,7 +34,6 @@ export interface X402Config {
   enabled: boolean;
   network: string;
   payTo: string;
-  testPaymentAmount: string;
   maxTimeoutSeconds: number;
   syncSettle: boolean;
   purchaseStorePath: string;
@@ -198,7 +197,6 @@ export function loadConfig(): ServiceConfig {
       enabled: readEnv("X402_ENABLED", "true") === "true",
       network: readEnv("X402_NETWORK", "eip155:196"),
       payTo: readEnv("X402_PAY_TO", readEnv("OKX_WALLET_ADDRESS")),
-      testPaymentAmount: readEnv("X402_TEST_PAYMENT_AMOUNT", "0.01"),
       maxTimeoutSeconds: Number(readEnv("X402_MAX_TIMEOUT_SECONDS", "300")),
       syncSettle: readEnv("X402_SYNC_SETTLE", "false") === "true",
       purchaseStorePath: readEnv("X402_PURCHASE_STORE_PATH", "data/x402-domain-purchases.json")

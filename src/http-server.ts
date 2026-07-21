@@ -34,8 +34,9 @@ const userApiKeys = new UserApiKeyStore(config.auth, database);
 const x402Purchases = new X402PurchaseStore(config.x402, database);
 const oyira = new OyiraService(dynadot, domainQuotes, domainMonitor, domainLedger, gemini, sessions);
 let x402PurchaseServer: Promise<x402HTTPResourceServer> | null = null;
-let x402TestPaymentServer: Promise<x402HTTPResourceServer> | null = null;
 const accessRecoveryChallenges = new Map<string, AccessRecoveryChallenge>();
+const x402DomainPurchasePaths = ["/x402/domain/purchase", "/agent/x402", "/agent/tools/call"];
+const xLayerUsdt0Asset = "0x779ded0c9e1022225f8e0630b35a9b54be713736";
 
 interface AccessRecoveryChallenge {
   id: string;
@@ -264,106 +265,9 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/x402/test-payment") {
-      assertX402PaymentConfigured();
-      const body = await readJsonBody<Record<string, unknown>>(request);
-      const context = x402RequestContext(request, url, body);
-      const resourceServer = await getX402TestPaymentServer();
-      const paymentResult = await resourceServer.processHTTPRequest(context);
-
-      await auditLog.append({
-        action: "x402-test-payment",
-        status: "attempt",
-        request: auditRequest(body, {
-          role: "customer",
-          customerId: readOptionalString(body, "customerId"),
-          keyId: readOptionalString(body, "idempotencyKey")
-        })
-      });
-
-      if (paymentResult.type === "payment-error") {
-        sendInstructions(response, paymentResult.response);
-        return;
-      }
-
-      if (paymentResult.type !== "payment-verified") {
-        throw new HttpError(500, "x402 test payment route did not require payment.");
-      }
-
-      const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
-      const settlement = await resourceServer.processSettlement(
-        paymentResult.paymentPayload,
-        paymentResult.paymentRequirements,
-        paymentResult.declaredExtensions,
-        {
-          request: context,
-          responseBody: Buffer.from("{}"),
-          responseHeaders: {}
-        }
-      );
-
-      if (!settlement.success) {
-        await auditLog.append({
-          action: "x402-test-payment",
-          status: "failure",
-          request: auditRequest(body, {
-            role: "customer",
-            customerId: readOptionalString(body, "customerId"),
-            keyId: readOptionalString(body, "idempotencyKey")
-          }),
-          result: {
-            x402Payer: verifiedPaymentPayer,
-            error: settlement.errorMessage ?? settlement.errorReason
-          }
-        });
-        sendInstructions(response, settlement.response);
-        return;
-      }
-
-      const customerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
-      await auditLog.append({
-        action: "x402-test-payment",
-        status: "success",
-        request: auditRequest(body, {
-          role: "customer",
-          customerId,
-          keyId: readOptionalString(body, "idempotencyKey")
-        }),
-        result: {
-          x402Payer: verifiedPaymentPayer,
-          transaction: settlement.transaction,
-          amount: settlement.requirements.amount,
-          asset: settlement.requirements.asset,
-          network: settlement.requirements.network
-        }
-      });
-
-      sendJson(
-        response,
-        200,
-        {
-          agent: "oyira",
-          action: "x402-test-payment",
-          status: "payment_settled",
-          reply: "x402 test payment settled. No domain purchase was attempted.",
-          customerId,
-          x402Payer: verifiedPaymentPayer,
-          payment: {
-            provider: "x402",
-            network: settlement.requirements.network,
-            transaction: settlement.transaction,
-            amount: settlement.requirements.amount,
-            asset: settlement.requirements.asset
-          }
-        },
-        settlement.headers
-      );
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/x402/domain/purchase") {
+    if (request.method === "POST" && x402DomainPurchasePaths.includes(url.pathname)) {
       assertX402Configured();
-      const body = await readJsonBody<Record<string, unknown>>(request);
+      const body = normalizeX402PurchaseInvocation(await readJsonBody<Record<string, unknown>>(request));
       const context = x402RequestContext(request, url, body);
       const resourceServer = await getX402PurchaseServer();
       const paymentResult = await resourceServer.processHTTPRequest(context);
@@ -934,7 +838,6 @@ function manifest() {
       x402PurchaseReadiness: "/agent/x402/purchase-readiness",
       brandDiscovery: "/agent/brand-discovery",
       message: "/agent/message",
-      x402TestPayment: "/x402/test-payment",
       x402Purchase: "/x402/domain/purchase",
       actions: {
         createPayment: "/agent/actions/create-payment",
@@ -993,6 +896,42 @@ function manifest() {
         optional: ["sessionId", "customerId", "target", "frontendTarget", "backendTarget", "nameservers", "ttl", "append", "skipLedgerCheck"]
       }
     ],
+    tools: [
+      {
+        name: "purchase_domain_x402",
+        title: "Purchase domain with x402",
+        description: "Quote and register an available domain after exact x402 payment settlement.",
+        method: "POST",
+        endpoint: "/x402/domain/purchase",
+        invocationEndpoints: x402DomainPurchasePaths,
+        protocol: "x402",
+        payment: {
+          challengeStatus: 402,
+          challengeHeader: "PAYMENT-REQUIRED",
+          signatureHeader: "PAYMENT-SIGNATURE",
+          network: config.x402.network,
+          asset: {
+            symbol: "USDT0",
+            address: xLayerUsdt0Asset,
+            chainId: 196
+          }
+        },
+        inputSchema: {
+          type: "object",
+          required: ["idempotencyKey", "domainName", "years", "registrationContact"],
+          properties: {
+            idempotencyKey: { type: "string" },
+            domainName: { type: "string", description: "Fully-qualified domain such as bondibark.xyz." },
+            years: { type: "integer", minimum: 1, maximum: 10 },
+            registrationContact: {
+              type: "object",
+              required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"]
+            },
+            nameservers: { type: "array", items: { type: "string" } }
+          }
+        }
+      }
+    ],
     auth: {
       publicMarketplace: "No owner token or customer API key is required to buy with x402. A successful first x402 domain purchase returns a one-time customerAccess.apiKey for future owner-scoped domain changes.",
       adminSchemes: ["Authorization: Bearer <owner-token>", "x-api-auth-token: <owner-token>"],
@@ -1006,7 +945,7 @@ function manifest() {
     marketplace: {
       mode: "a2mcp-x402",
       endpoint: "/x402/domain/purchase",
-      testEndpoint: "/x402/test-payment",
+      invocationEndpoints: x402DomainPurchasePaths,
       requiresCustomerApiKey: false,
       returnsCustomerAccessOnPurchase: true,
       proof: "x402 PAYMENT-SIGNATURE verified and settled through the OKX facilitator before Dynadot registration. Ledger ownership is bound to the verified payment payload payer, and OKX settlement payer must match when present.",
@@ -1019,7 +958,8 @@ function manifest() {
       rail: {
         network: "X Layer",
         chainId: 196,
-        asset: "USD₮0"
+        asset: "USDT0",
+        assetAddress: xLayerUsdt0Asset
       }
     },
     domainManagement: {
@@ -1423,49 +1363,6 @@ function assertX402Configured() {
   }
 }
 
-async function getX402TestPaymentServer() {
-  if (!x402TestPaymentServer) {
-    const facilitator = new OKXFacilitatorClient({
-      apiKey: config.okx.apiKey,
-      secretKey: config.okx.apiSecret,
-      passphrase: config.okx.apiPassphrase,
-      baseUrl: config.okx.baseUrl,
-      syncSettle: config.x402.syncSettle
-    });
-    const x402Network = config.x402.network as `${string}:${string}`;
-    const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
-    const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
-      "POST /x402/test-payment": {
-        accepts: {
-          scheme: "exact",
-          network: x402Network,
-          payTo: config.x402.payTo,
-          price: `$${config.x402.testPaymentAmount}`,
-          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
-        },
-        description: "Settle a small x402 payment through Oyira without registering a domain.",
-        mimeType: "application/json",
-        unpaidResponseBody: () => ({
-          contentType: "application/json",
-          body: {
-            error: "payment_required",
-            testPayment: {
-              amount: config.x402.testPaymentAmount,
-              currency: "USD",
-              network: config.x402.network,
-              payTo: config.x402.payTo
-            },
-            safeguards: ["This endpoint verifies x402 settlement only.", "No Dynadot purchase or domain registration is attempted."]
-          }
-        })
-      }
-    });
-    x402TestPaymentServer = httpResourceServer.initialize().then(() => httpResourceServer);
-  }
-
-  return x402TestPaymentServer;
-}
-
 async function getX402PurchaseServer() {
   if (!x402PurchaseServer) {
     const facilitator = new OKXFacilitatorClient({
@@ -1477,46 +1374,48 @@ async function getX402PurchaseServer() {
     });
     const x402Network = config.x402.network as `${string}:${string}`;
     const resourceServer = new x402ResourceServer(facilitator).register(x402Network, new ExactEvmScheme());
-    const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
-      "POST /x402/domain/purchase": {
-        accepts: {
-          scheme: "exact",
-          network: x402Network,
-          payTo: config.x402.payTo,
-          price: async (context) => {
-            const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
-            return `$${prepared.quote.totalDue}`;
-          },
-          maxTimeoutSeconds: config.x402.maxTimeoutSeconds
-        },
-        description: "Register a domain through Oyira after exact x402 payment settlement.",
-        mimeType: "application/json",
-        unpaidResponseBody: async (context) => {
+    const x402PurchaseRoute = {
+      accepts: {
+        scheme: "exact",
+        network: x402Network,
+        payTo: config.x402.payTo,
+        price: async (context: HTTPRequestContext) => {
           const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
+          return `$${prepared.quote.totalDue}`;
+        },
+        maxTimeoutSeconds: config.x402.maxTimeoutSeconds
+      },
+      description: "Register a domain through Oyira after exact x402 payment settlement.",
+      mimeType: "application/json",
+      unpaidResponseBody: async (context: HTTPRequestContext) => {
+        const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));
 
-          return {
-            contentType: "application/json",
-            body: {
-              error: "payment_required",
-              quote: {
-                id: prepared.quote.id,
-                domainName: prepared.quote.domainName,
-                years: prepared.quote.years,
-                totalDue: prepared.quote.totalDue,
-                currency: prepared.quote.currency,
-                paymentSymbol: prepared.quote.paymentSymbol,
-                expiresAt: prepared.quote.expiresAt
-              },
-              safeguards: [
-                "x402 payment must settle before registration.",
-                "idempotencyKey prevents duplicate registrations.",
-                "ALLOW_LIVE_PURCHASES must be true for live Dynadot registration."
-              ]
-            }
-          };
-        }
+        return {
+          contentType: "application/json",
+          body: {
+            error: "payment_required",
+            quote: {
+              id: prepared.quote.id,
+              domainName: prepared.quote.domainName,
+              years: prepared.quote.years,
+              totalDue: prepared.quote.totalDue,
+              currency: prepared.quote.currency,
+              paymentSymbol: prepared.quote.paymentSymbol,
+              expiresAt: prepared.quote.expiresAt
+            },
+            safeguards: [
+              "x402 payment must settle before registration.",
+              "idempotencyKey prevents duplicate registrations.",
+              "ALLOW_LIVE_PURCHASES must be true for live Dynadot registration."
+            ]
+          }
+        };
       }
-    });
+    };
+    const x402PurchaseRoutes = Object.fromEntries(
+      x402DomainPurchasePaths.map((path) => [`POST ${path}`, x402PurchaseRoute])
+    );
+    const httpResourceServer = new x402HTTPResourceServer(resourceServer, x402PurchaseRoutes);
     x402PurchaseServer = httpResourceServer.initialize().then(() => httpResourceServer);
   }
 
@@ -1742,6 +1641,23 @@ function parseLoosePositiveAmount(value: unknown) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function normalizeX402PurchaseInvocation(body: Record<string, unknown>) {
+  if (readOptionalString(body, "domainName")) {
+    return body;
+  }
+
+  for (const key of ["arguments", "input", "params", "parameters", "request", "payload"]) {
+    const nested = objectValue(body[key]);
+    if (nested && readOptionalString(nested, "domainName")) {
+      return {
+        ...nested,
+        idempotencyKey: readOptionalString(nested, "idempotencyKey") ?? readOptionalString(body, "idempotencyKey")
+      };
+    }
+  }
+
+  return body;
+}
 function x402RequestContext(
   request: http.IncomingMessage,
   url: URL,
@@ -2324,7 +2240,6 @@ async function readyReport() {
     check("okx.statusPath", Boolean(config.okx.statusPath), "OKX payment status path is configured."),
     check("x402.payTo", Boolean(config.x402.payTo), "x402 pay-to wallet is configured."),
     check("x402.network", Boolean(config.x402.network), "x402 network is configured."),
-    check("x402.testPaymentAmount", Boolean(config.x402.testPaymentAmount), "x402 test payment amount is configured."),
     check("stores.x402Purchases", Boolean(config.x402.purchaseStorePath), "x402 purchase store path is configured."),
     check("stores.quotes", Boolean(config.quotes.storePath), "Quote store path is configured."),
     check("stores.ledger", Boolean(config.ledger.storePath), "Ledger store path is configured."),
@@ -2385,14 +2300,6 @@ class HttpError extends Error {
     super(message);
   }
 }
-
-
-
-
-
-
-
-
 
 
 

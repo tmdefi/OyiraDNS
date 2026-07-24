@@ -267,7 +267,17 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && (x402DomainPurchasePaths.includes(url.pathname) || url.pathname === "/agent/tools/call")) {
       assertX402Configured();
-      const body = normalizeX402PurchaseInvocation(await readJsonBody<Record<string, unknown>>(request));
+      let rawBody: Record<string, unknown>;
+      try {
+        rawBody = await readJsonBody<Record<string, unknown>>(request);
+      } catch (err) {
+        if (err instanceof HttpError && err.statusCode === 400 && err.message === "Missing JSON body.") {
+          rawBody = {};
+        } else {
+          throw err;
+        }
+      }
+      const body = normalizeX402PurchaseInvocation(rawBody);
       const context = x402RequestContext(request, url, body);
       const resourceServer = await getX402PurchaseServer();
       const paymentResult = await resourceServer.processHTTPRequest(context);

@@ -265,7 +265,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && x402DomainPurchasePaths.includes(url.pathname)) {
+    if (request.method === "POST" && (x402DomainPurchasePaths.includes(url.pathname) || url.pathname === "/agent/tools/call")) {
       assertX402Configured();
       const body = normalizeX402PurchaseInvocation(await readJsonBody<Record<string, unknown>>(request));
       const context = x402RequestContext(request, url, body);
@@ -292,6 +292,46 @@ const server = http.createServer(async (request, response) => {
       }
 
       const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
+
+      if (url.pathname === "/agent/tools/call") {
+        const params = body.params as Record<string, unknown> | undefined;
+        const name = params?.name;
+        const args = (params?.arguments as Record<string, unknown>) || {};
+
+        try {
+          let toolResult;
+          if (name === "search_domain") {
+            const domainName = readRequiredString(args, "domainName");
+            const currency = readOptionalString(args, "currency");
+            const tlds = Array.isArray(args.tlds) ? args.tlds.map(String) : undefined;
+            toolResult = await domainQuotes.searchVariants({ name: domainName, currency, tlds, showPrice: true });
+          } else if (name === "quote_domain") {
+            const domainName = readRequiredString(args, "domainName");
+            const currency = readOptionalString(args, "currency");
+            const paymentSymbol = readOptionalString(args, "paymentSymbol");
+            const years = typeof args.years === "number" ? args.years : 1;
+            toolResult = await domainQuotes.createQuote({ domainName, currency, paymentSymbol, years });
+          } else {
+            throw new HttpError(404, `Tool ${name} is not supported or requires the x402 endpoint.`);
+          }
+
+          sendJson(response, 200, {
+            jsonrpc: "2.0",
+            id: body.id ?? null,
+            result: {
+              content: [{ type: "text", text: JSON.stringify(toolResult, null, 2) }]
+            }
+          });
+        } catch (error) {
+          sendJson(response, 200, {
+            jsonrpc: "2.0",
+            id: body.id ?? null,
+            error: { code: -32000, message: error instanceof Error ? error.message : "Tool execution failed" }
+          });
+        }
+        return;
+      }
+
       const prepared = await prepareX402Purchase(body);
 
       if (prepared.record.status === "registered") {
@@ -1413,9 +1453,25 @@ async function getX402PurchaseServer() {
         };
       }
     };
-    const x402PurchaseRoutes = Object.fromEntries(
+    const x402PurchaseRoutes: Record<string, any> = Object.fromEntries(
       x402DomainPurchasePaths.map((path) => [`POST ${path}`, x402PurchaseRoute])
     );
+    x402PurchaseRoutes["POST /agent/tools/call"] = {
+      accepts: {
+        scheme: "exact",
+        network: x402Network,
+        asset: xLayerUsdt0Asset,
+        payTo: config.x402.payTo,
+        price: "0.00",
+        maxTimeoutSeconds: config.x402.maxTimeoutSeconds
+      },
+      description: "Call Oyira tools via MCP",
+      mimeType: "application/json",
+      unpaidResponseBody: async () => ({
+        contentType: "application/json",
+        body: { error: "payment_required" }
+      })
+    };
     const httpResourceServer = new x402HTTPResourceServer(resourceServer, x402PurchaseRoutes);
     x402PurchaseServer = httpResourceServer.initialize().then(() => httpResourceServer);
   }

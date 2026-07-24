@@ -265,16 +265,18 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "POST" && (x402DomainPurchasePaths.includes(url.pathname) || url.pathname === "/agent/tools/call")) {
+    if ((request.method === "POST" || request.method === "GET") && (x402DomainPurchasePaths.includes(url.pathname) || url.pathname === "/agent/tools/call")) {
       assertX402Configured();
-      let rawBody: Record<string, unknown>;
-      try {
-        rawBody = await readJsonBody<Record<string, unknown>>(request);
-      } catch (err) {
-        if (err instanceof HttpError && err.statusCode === 400 && err.message === "Missing JSON body.") {
-          rawBody = {};
-        } else {
-          throw err;
+      let rawBody: Record<string, unknown> = {};
+      if (request.method === "POST") {
+        try {
+          rawBody = await readJsonBody<Record<string, unknown>>(request);
+        } catch (err) {
+          if (err instanceof HttpError && err.statusCode === 400 && err.message === "Missing JSON body.") {
+            rawBody = {};
+          } else {
+            throw err;
+          }
         }
       }
       const body = normalizeX402PurchaseInvocation(rawBody);
@@ -1482,6 +1484,7 @@ async function getX402PurchaseServer() {
         body: { error: "payment_required" }
       })
     };
+    x402PurchaseRoutes["GET /agent/tools/call"] = x402PurchaseRoutes["POST /agent/tools/call"];
     const httpResourceServer = new x402HTTPResourceServer(resourceServer, x402PurchaseRoutes);
     x402PurchaseServer = httpResourceServer.initialize().then(() => httpResourceServer);
   }

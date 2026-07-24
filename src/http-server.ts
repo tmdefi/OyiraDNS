@@ -1378,6 +1378,7 @@ async function getX402PurchaseServer() {
       accepts: {
         scheme: "exact",
         network: x402Network,
+        asset: xLayerUsdt0Asset,
         payTo: config.x402.payTo,
         price: async (context: HTTPRequestContext) => {
           const prepared = await prepareX402Purchase(asBodyObject(context.adapter.getBody?.()));

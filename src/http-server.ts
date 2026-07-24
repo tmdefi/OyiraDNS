@@ -272,7 +272,7 @@ const server = http.createServer(async (request, response) => {
         try {
           rawBody = await readJsonBody<Record<string, unknown>>(request);
         } catch (err) {
-          if (err instanceof HttpError && err.statusCode === 400 && err.message === "Missing JSON body.") {
+          if (err instanceof HttpError && err.status === 400 && err.message === "Missing JSON body.") {
             rawBody = {};
           } else {
             throw err;

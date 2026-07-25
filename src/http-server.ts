@@ -872,7 +872,7 @@ function manifest() {
     name: "Oyira",
     id: "oyira",
     kind: "agent-service-provider",
-    description: "AI domain commerce agent for search, quote, payment preparation, registration gating, monitoring, and domain transfer support.",
+    description: "AI domain commerce agent for search, quote, payment preparation, registration gating, monitoring, domain transfer support, DNS configuration, nameserver setup, and project linking.",
     model: {
       provider: "gemini",
       name: config.gemini.model

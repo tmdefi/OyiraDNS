@@ -981,7 +981,7 @@ function manifest() {
     name: "Oyira",
     id: "oyira",
     kind: "agent-service-provider",
-    description: "Oyira provides an HTTP API for automated domain registration and management. Core capabilities include domain availability checks, pricing quotes, and AI-assisted brand name generation. Registration is strictly gated by x402 cryptocurrency payments on X Layer, requiring OKX settlement prior to Dynadot provisioning. Through its robust integration with Dynadot, the service registers your domains. Successful purchases yield a ledger record and a secure customer API key. This key authorizes subsequent domain management operations, including Dynadot DNS record configuration, nameserver updates, and domain pushes. If the key is lost, users can recover access via an EIP-191 signature challenge.",
+    description: "Oyira lets agents search, quote, register, and manage domains through Dynadot, with public purchases gated by x402 payments on X Layer.",
     model: {
       provider: "gemini",
       name: config.gemini.model
@@ -1038,8 +1038,13 @@ function manifest() {
       },
       {
         endpoint: "/agent/actions/push-domain",
-        required: ["confirm", "domainName", "targetAccount or targetEmail"],
-        optional: ["sessionId", "customerId", "message"]
+        required: ["confirm", "domainName"],
+        oneOf: [
+          { required: ["targetAccount"] },
+          { required: ["targetEmail"] }
+        ],
+        optional: ["sessionId", "customerId", "targetAccount", "targetEmail", "message"],
+        note: "Provide either targetAccount or targetEmail as the Dynadot destination for the domain push."
       },
       {
         endpoint: "/agent/actions/configure-dns",
@@ -1086,7 +1091,52 @@ function manifest() {
             years: { type: "integer", minimum: 1, maximum: 10 },
             registrationContact: {
               type: "object",
-              required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"]
+              required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"],
+              properties: {
+                registrantName: {
+                  type: "string",
+                  description: "Registrant's full legal name."
+                },
+                email: {
+                  type: "string",
+                  format: "email",
+                  description: "Registrant email address."
+                },
+                phone: {
+                  type: "string",
+                  description: "Registrant phone number, preferably in international format."
+                },
+                phoneCountryCode: {
+                  type: "string",
+                  description: "Optional country calling code such as +1."
+                },
+                address: {
+                  type: "string",
+                  description: "Street address for the domain registration contact."
+                },
+                city: {
+                  type: "string"
+                },
+                state: {
+                  type: "string",
+                  description: "State, province, or region when applicable."
+                },
+                country: {
+                  type: "string",
+                  description: "Registrant country name or two-letter country code."
+                },
+                postalCode: {
+                  type: "string"
+                },
+                zipCode: {
+                  type: "string",
+                  description: "Accepted alias for postalCode."
+                },
+                organization: {
+                  type: "string",
+                  description: "Optional organization name."
+                }
+              }
             },
             nameservers: { type: "array", items: { type: "string" } }
           }
@@ -1161,7 +1211,7 @@ function manifest() {
       "After a successful x402 purchase, store customerAccess.apiKey and use it as Authorization: Bearer <apiKey> for DNS, nameserver, and project-link actions.",
       "For older purchases without customerAccess.apiKey, call /auth/recover-access/challenge for the domain, have the original x402 payer wallet sign the exact message field, not challengeId, then call /auth/recover-access/verify to issue a customer key.",
       "Do not ask customers for API_AUTH_TOKEN; that is the owner/admin token. Use customerAccess.apiKey for purchased-domain changes.",
-      "Public x402 payments use USD₮0 on X Layer."
+      "Public x402 payments use USDT0 on X Layer."
     ],
     safety: [
       "Quote before payment.",

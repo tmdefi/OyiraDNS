@@ -1020,6 +1020,14 @@ function manifest() {
       "get_domain_ledger_record"
     ],
     gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers", "configure_dns", "link_project"],
+    serviceNotices: [
+      {
+        topic: "nameserver_changes",
+        status: "planned",
+        enabled: config.dynadot.allowNameserverChanges,
+        message: "Nameserver changes are not currently available for public users or MCP agents. Support for nameserver updates will be added in a later release."
+      }
+    ],
     gatedActions: [
       {
         endpoint: "/agent/actions/create-payment",
@@ -1165,6 +1173,13 @@ function manifest() {
         endpoint: "/agent/actions/set-nameservers",
         method: "POST",
         description: "Set authoritative nameservers for a purchased domain after customer authentication and ownership check.",
+        availability: {
+          status: config.dynadot.allowNameserverChanges ? "enabled" : "planned",
+          enabled: config.dynadot.allowNameserverChanges,
+          message: config.dynadot.allowNameserverChanges
+            ? "Nameserver changes are currently enabled."
+            : "Nameserver changes are not currently available for public users or MCP agents. Support for nameserver updates will be added in a later release."
+        },
         required: ["confirm", "domainName", "nameservers"],
         optional: ["sessionId", "customerId", "skipLedgerCheck"],
         inputSchema: {

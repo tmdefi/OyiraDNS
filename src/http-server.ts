@@ -281,7 +281,7 @@ const server = http.createServer(async (request, response) => {
           }
         }
       }
-      const body = normalizeX402PurchaseInvocation(rawBody);
+      const body = url.pathname === "/agent/tools/call" ? rawBody : normalizeX402PurchaseInvocation(rawBody);
       const context = x402RequestContext(request, url, body);
       const resourceServer = await getX402PurchaseServer();
       const paymentResult = await resourceServer.processHTTPRequest(context);
@@ -308,8 +308,9 @@ const server = http.createServer(async (request, response) => {
       const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
 
       if (url.pathname === "/agent/tools/call") {
-        const params = body.params as Record<string, unknown> | undefined;
-        const name = params?.name;
+        const isJsonRpc = body.jsonrpc === "2.0" || typeof body.method === "string";
+        const params = isJsonRpc ? (body.params as Record<string, unknown> | undefined) : body;
+        const name = params?.name as string | undefined;
         const args = (params?.arguments as Record<string, unknown>) || {};
 
         try {

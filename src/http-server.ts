@@ -285,8 +285,8 @@ const server = http.createServer(async (request, response) => {
 
       if (url.pathname === "/agent/tools/call") {
         const payload = (body.params ?? body) as Record<string, unknown>;
-        if (typeof payload.name !== "string" || !payload.name) {
-          throw new HttpError(400, "Invalid JSON-RPC payload: missing tool 'name' in parameters.");
+        if (typeof payload.name !== "string" || !payload.name || payload.name === "undefined") {
+          throw new HttpError(400, "Invalid JSON-RPC payload: missing or malformed tool 'name' in parameters.");
         }
       }
 

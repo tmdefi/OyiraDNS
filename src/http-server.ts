@@ -1023,43 +1023,267 @@ function manifest() {
     gatedActions: [
       {
         endpoint: "/agent/actions/create-payment",
+        method: "POST",
+        description: "Create an OKX payment request from an existing domain quote. Requires customer or owner authentication and explicit confirmation.",
         required: ["confirm", "quoteId"],
-        optional: ["sessionId", "recipient", "description", "externalId"]
+        optional: ["sessionId", "recipient", "description", "externalId"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "quoteId"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm payment creation." },
+            quoteId: { type: "string", description: "Quote identifier returned by quote_domain or a quote endpoint." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            recipient: { type: "string", description: "Optional payment recipient wallet address. Defaults to configured OKX_WALLET_ADDRESS." },
+            description: { type: "string", description: "Optional payment memo shown to the payer." },
+            externalId: { type: "string", description: "Optional caller-provided id for reconciliation." }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/verify-payment",
+        method: "POST",
+        description: "Verify an OKX payment before a domain registration or other gated action proceeds.",
         required: ["confirm", "paymentId"],
-        optional: ["sessionId", "expectedPaymentAmount", "expectedPaymentCurrency"]
+        optional: ["sessionId", "expectedPaymentAmount", "expectedPaymentCurrency"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "paymentId"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm payment verification." },
+            paymentId: { type: "string", description: "Payment identifier returned by create-payment." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            expectedPaymentAmount: { type: "string", description: "Optional exact expected payment amount to verify." },
+            expectedPaymentCurrency: { type: "string", description: "Optional expected payment currency or token symbol, such as USDT0." }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/purchase-domain",
+        method: "POST",
+        description: "Register a quoted domain through Dynadot after the linked payment has been verified.",
         required: ["confirm", "domainName", "quoteId", "paymentId"],
-        optional: ["sessionId", "customerId", "years", "nameservers", "registrationContact"]
+        optional: ["sessionId", "customerId", "years", "nameservers", "registrationContact"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "domainName", "quoteId", "paymentId", "registrationContact"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm live domain registration." },
+            domainName: { type: "string", description: "Fully-qualified domain to register, such as bondibark.xyz." },
+            quoteId: { type: "string", description: "Usable quote id for the same domain and registration term." },
+            paymentId: { type: "string", description: "Verified payment id linked to the quote." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            customerId: { type: "string", description: "Optional customer id. Public customers should normally authenticate with customerAccess.apiKey instead." },
+            years: { type: "integer", minimum: 1, maximum: 10, description: "Registration term. Must match the quote; defaults to 1." },
+            nameservers: { type: "array", maxItems: 13, items: { type: "string" }, description: "Optional nameservers to assign during registration." },
+            registrationContact: {
+              type: "object",
+              required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"],
+              description: "Registrant contact details supplied by the customer. Masked placeholders are rejected.",
+              properties: {
+                registrantName: { type: "string", description: "Registrant's full legal name." },
+                email: { type: "string", format: "email", description: "Registrant email address." },
+                phone: { type: "string", description: "Registrant phone number, preferably in international format." },
+                phoneCountryCode: { type: "string", description: "Optional country calling code such as +1." },
+                address: { type: "string", description: "Street address for the domain registration contact." },
+                city: { type: "string" },
+                state: { type: "string", description: "State, province, or region when applicable." },
+                country: { type: "string", description: "Registrant country name or two-letter country code." },
+                postalCode: { type: "string" },
+                zipCode: { type: "string", description: "Accepted alias for postalCode." },
+                organization: { type: "string", description: "Optional organization name." }
+              }
+            }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/push-domain",
+        method: "POST",
+        description: "Push a purchased domain from Oyira's Dynadot account to the customer's Dynadot account or email destination.",
         required: ["confirm", "domainName"],
         oneOf: [
           { required: ["targetAccount"] },
           { required: ["targetEmail"] }
         ],
         optional: ["sessionId", "customerId", "targetAccount", "targetEmail", "message"],
-        note: "Provide either targetAccount or targetEmail as the Dynadot destination for the domain push."
+        note: "Provide either targetAccount or targetEmail as the Dynadot destination for the domain push.",
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "domainName"],
+          oneOf: [
+            { required: ["targetAccount"] },
+            { required: ["targetEmail"] }
+          ],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm a live Dynadot domain push." },
+            domainName: { type: "string", description: "Purchased domain to push, such as bondibark.xyz." },
+            targetAccount: { type: "string", description: "Recipient Dynadot account username." },
+            targetEmail: { type: "string", format: "email", description: "Email associated with the recipient Dynadot account." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            customerId: { type: "string", description: "Optional customer id. Public customers should normally authenticate with customerAccess.apiKey instead." },
+            message: { type: "string", description: "Optional message included with the Dynadot push." }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/configure-dns",
+        method: "POST",
+        description: "Configure Dynadot DNS records for a purchased domain after customer authentication and ownership check.",
         required: ["confirm", "domainName", "records"],
-        optional: ["sessionId", "customerId", "ttl", "append", "skipLedgerCheck"]
+        optional: ["sessionId", "customerId", "ttl", "append", "skipLedgerCheck"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "domainName", "records"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm a live DNS change." },
+            domainName: { type: "string", description: "Purchased domain whose DNS records should be configured." },
+            records: {
+              type: "array",
+              minItems: 1,
+              description: "DNS records to set through Dynadot.",
+              items: {
+                type: "object",
+                required: ["type", "name", "value"],
+                properties: {
+                  type: { type: "string", description: "DNS record type, such as a, aaaa, cname, txt, mx, or caa." },
+                  name: { type: "string", description: "Record host/name, such as @ or www." },
+                  value: { type: "string", description: "Record value, such as an IP address, hostname, or TXT value." },
+                  priority: { type: "integer", description: "Optional priority for MX-style records." }
+                }
+              }
+            },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            customerId: { type: "string", description: "Optional customer id. Public customers should normally authenticate with customerAccess.apiKey instead." },
+            ttl: { type: "integer", minimum: 60, description: "Optional TTL in seconds. Defaults to 300." },
+            append: { type: "boolean", description: "When true, append records instead of replacing existing DNS configuration." },
+            skipLedgerCheck: { type: "boolean", description: "Owner/admin-only override for ledger ownership checks." }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/set-nameservers",
+        method: "POST",
+        description: "Set authoritative nameservers for a purchased domain after customer authentication and ownership check.",
         required: ["confirm", "domainName", "nameservers"],
-        optional: ["sessionId", "customerId", "skipLedgerCheck"]
+        optional: ["sessionId", "customerId", "skipLedgerCheck"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "domainName", "nameservers"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm a live nameserver change." },
+            domainName: { type: "string", description: "Purchased domain whose nameservers should be changed." },
+            nameservers: { type: "array", minItems: 1, maxItems: 13, items: { type: "string" }, description: "Nameserver hostnames to assign." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            customerId: { type: "string", description: "Optional customer id. Public customers should normally authenticate with customerAccess.apiKey instead." },
+            skipLedgerCheck: { type: "boolean", description: "Owner/admin-only override for ledger ownership checks." }
+          }
+        }
       },
       {
         endpoint: "/agent/actions/link-project",
+        method: "POST",
+        description: "Apply a project hosting preset, such as Vercel, to a purchased domain through DNS records or nameservers.",
         required: ["confirm", "domainName", "provider"],
-        optional: ["sessionId", "customerId", "target", "frontendTarget", "backendTarget", "nameservers", "ttl", "append", "skipLedgerCheck"]
+        optional: ["sessionId", "customerId", "target", "frontendTarget", "backendTarget", "nameservers", "ttl", "append", "skipLedgerCheck"],
+        inputSchema: {
+          type: "object",
+          required: ["confirm", "domainName", "provider"],
+          properties: {
+            confirm: { type: "boolean", const: true, description: "Must be true to confirm live DNS or nameserver changes." },
+            domainName: { type: "string", description: "Purchased domain to link to the project provider." },
+            provider: { type: "string", description: "Project provider preset, such as vercel." },
+            target: { type: "string", description: "Optional provider target used by supported presets." },
+            frontendTarget: { type: "string", description: "Optional frontend hostname or provider target for split frontend/backend presets." },
+            backendTarget: { type: "string", description: "Optional backend hostname or provider target for split frontend/backend presets." },
+            nameservers: { type: "array", minItems: 1, maxItems: 13, items: { type: "string" }, description: "Optional provider nameservers when using a nameserver-based preset." },
+            sessionId: { type: "string", description: "Optional conversation/session identifier for state continuity." },
+            customerId: { type: "string", description: "Optional customer id. Public customers should normally authenticate with customerAccess.apiKey instead." },
+            ttl: { type: "integer", minimum: 60, description: "Optional TTL in seconds for DNS-record presets. Defaults to 300." },
+            append: { type: "boolean", description: "When true, append provider records instead of replacing existing DNS configuration." },
+            skipLedgerCheck: { type: "boolean", description: "Owner/admin-only override for ledger ownership checks." }
+          }
+        }
+      }
+    ],
+    publicEndpoints: [
+      {
+        endpoint: "/public/domain-check",
+        method: "POST",
+        description: "Check availability and pricing for a full domain, or search configured TLD variants for a brand/base name. No authentication required.",
+        inputSchema: {
+          type: "object",
+          required: ["domainName"],
+          properties: {
+            domainName: { type: "string", description: "Full domain such as bondibark.xyz, or a base name such as bondibark. Aliases: domain, name." },
+            domain: { type: "string", description: "Alias for domainName." },
+            name: { type: "string", description: "Alias for domainName, usually a base name without TLD." },
+            years: { type: "integer", minimum: 1, maximum: 10, description: "Registration term for pricing. Defaults to 1." },
+            currency: { type: "string", description: "Fiat currency code for pricing. Defaults to configured quote currency, usually USD." },
+            tlds: { type: "array", maxItems: 8, items: { type: "string" }, description: "Optional TLDs to check when domainName is a base name." }
+          }
+        }
+      },
+      {
+        endpoint: "/agent/brand-discovery",
+        method: "POST",
+        description: "Generate brandable base-name ideas from a brief and check live TLD availability/pricing. No authentication required.",
+        inputSchema: {
+          type: "object",
+          required: ["brief"],
+          properties: {
+            brief: { type: "string", description: "Description of the brand, product, or domain naming goal. Aliases: description, prompt." },
+            description: { type: "string", description: "Alias for brief." },
+            prompt: { type: "string", description: "Alias for brief." },
+            count: { type: "integer", minimum: 1, maximum: 20, description: "Maximum number of brand-name candidates to generate. Defaults to 8." },
+            tlds: { type: "array", maxItems: 8, items: { type: "string" }, description: "Optional TLDs to check for each candidate." },
+            currency: { type: "string", description: "Fiat currency code for pricing. Defaults to configured quote currency, usually USD." }
+          }
+        }
+      },
+      {
+        endpoint: "/agent/x402/purchase-readiness",
+        method: "POST",
+        description: "Validate whether an x402 domain purchase request has enough information before payment is attempted. No owner token required.",
+        inputSchema: {
+          type: "object",
+          required: ["domainName", "years", "registrationContact"],
+          properties: {
+            domainName: { type: "string", description: "Fully-qualified domain intended for x402 purchase." },
+            years: { type: "integer", minimum: 1, maximum: 10, description: "Requested registration term." },
+            registrationContact: {
+              type: "object",
+              required: ["registrantName", "email", "phone", "address", "city", "country", "postalCode"],
+              description: "Registrant contact details to validate before payment."
+            },
+            nameservers: { type: "array", maxItems: 13, items: { type: "string" }, description: "Optional nameservers to validate before purchase." }
+          }
+        }
+      },
+      {
+        endpoint: "/auth/recover-access/challenge",
+        method: "POST",
+        description: "Create an EIP-191 signing challenge so a buyer can recover a customer API key using the original x402 payer wallet.",
+        inputSchema: {
+          type: "object",
+          required: ["domainName"],
+          properties: {
+            domainName: { type: "string", description: "Purchased domain whose customer access should be recovered." }
+          }
+        }
+      },
+      {
+        endpoint: "/auth/recover-access/verify",
+        method: "POST",
+        description: "Verify an access-recovery signature and return a new one-time customer API key.",
+        inputSchema: {
+          type: "object",
+          required: ["challengeId", "signature"],
+          properties: {
+            challengeId: { type: "string", description: "Challenge id returned by /auth/recover-access/challenge." },
+            signature: { type: "string", description: "EIP-191 signature over the exact message field returned by the challenge endpoint." }
+          }
+        }
       }
     ],
     tools: [
@@ -1140,6 +1364,86 @@ function manifest() {
             },
             nameservers: { type: "array", items: { type: "string" } }
           }
+        },
+        examples: [
+          {
+            title: "Register a domain with x402 payment",
+            method: "POST",
+            endpoint: "/x402/domain/purchase",
+            body: {
+              idempotencyKey: "example-20260726-001",
+              domainName: "bondibark.xyz",
+              years: 1,
+              registrationContact: {
+                registrantName: "Example Customer",
+                email: "customer@example.com",
+                phone: "+14155550100",
+                address: "123 Market Street",
+                city: "San Francisco",
+                country: "US",
+                postalCode: "94105"
+              },
+              nameservers: ["ns1.example.com", "ns2.example.com"]
+            },
+            note: "The first request returns an x402 payment challenge. Resubmit the same body with the required PAYMENT-SIGNATURE after payment settlement."
+          }
+        ]
+      }
+    ],
+    usageExamples: [
+      {
+        title: "Check whether a domain is available",
+        method: "POST",
+        endpoint: "/public/domain-check",
+        body: {
+          domainName: "bondibark.xyz",
+          showPrice: true,
+          currency: "USD"
+        }
+      },
+      {
+        title: "Discover brandable domain options",
+        method: "POST",
+        endpoint: "/agent/brand-discovery",
+        body: {
+          brief: "A playful dog walking app for beach neighborhoods",
+          count: 5,
+          tlds: ["xyz", "com", "app"],
+          currency: "USD"
+        }
+      },
+      {
+        title: "Register a domain through x402",
+        method: "POST",
+        endpoint: "/x402/domain/purchase",
+        body: {
+          idempotencyKey: "example-20260726-001",
+          domainName: "bondibark.xyz",
+          years: 1,
+          registrationContact: {
+            registrantName: "Example Customer",
+            email: "customer@example.com",
+            phone: "+14155550100",
+            address: "123 Market Street",
+            city: "San Francisco",
+            country: "US",
+            postalCode: "94105"
+          }
+        },
+        note: "No owner token is required. Complete the x402 challenge on X Layer using USDT0, then resubmit with PAYMENT-SIGNATURE."
+      },
+      {
+        title: "Link a purchased domain to Vercel",
+        method: "POST",
+        endpoint: "/agent/actions/link-project",
+        headers: {
+          Authorization: "Bearer <customerAccess.apiKey>",
+          "Content-Type": "application/json"
+        },
+        body: {
+          confirm: true,
+          domainName: "bondibark.xyz",
+          provider: "vercel"
         }
       }
     ],

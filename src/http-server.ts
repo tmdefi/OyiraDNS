@@ -65,7 +65,9 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    const forwardedProto = request.headers["x-forwarded-proto"];
+    const resolvedProto = Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || "https");
+    const url = new URL(request.url ?? "/", `${resolvedProto}://${request.headers.host ?? "localhost"}`);
 
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/status")) {
       sendJson(response, 200, {
@@ -872,7 +874,7 @@ function manifest() {
     name: "Oyira",
     id: "oyira",
     kind: "agent-service-provider",
-    description: "AI domain commerce agent for search, quote, payment preparation, registration gating, monitoring, domain transfer support, DNS configuration, nameserver setup, and project linking.",
+    description: "Oyira provides an HTTP API for automated domain registration and management. Core capabilities include domain availability checks, pricing quotes, and AI-assisted brand name generation. Registration is strictly gated by x402 cryptocurrency payments on X Layer, requiring OKX settlement prior to Dynadot provisioning. Through its robust integration with Dynadot, the service registers your domains. Successful purchases yield a ledger record and a secure customer API key. This key authorizes subsequent domain management operations, including Dynadot DNS record configuration, nameserver updates, and domain pushes. If the key is lost, users can recover access via an EIP-191 signature challenge.",
     model: {
       provider: "gemini",
       name: config.gemini.model
@@ -1481,7 +1483,24 @@ async function getX402PurchaseServer() {
       mimeType: "application/json",
       unpaidResponseBody: async () => ({
         contentType: "application/json",
-        body: { error: "payment_required" }
+        body: {
+          error: "payment_required",
+          docs: {
+            description: "Call Oyira tools via x402 MCP endpoint.",
+            method: "POST",
+            jsonBody: {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/call",
+              params: {
+                name: "<tool_name>",
+                arguments: { "<key>": "<value>" }
+              }
+            },
+            supportedTools: ["search_domain", "quote_domain"],
+            auth: "x402 payment signature required. No customerId or API key required."
+          }
+        }
       })
     };
     x402PurchaseRoutes["GET /agent/tools/call"] = x402PurchaseRoutes["POST /agent/tools/call"];
@@ -1740,7 +1759,11 @@ function x402RequestContext(
     },
     getMethod: () => request.method ?? "GET",
     getPath: () => url.pathname,
-    getUrl: () => url.toString(),
+    getUrl: () => {
+      const httpsUrl = new URL(url.toString());
+      httpsUrl.protocol = "https:";
+      return httpsUrl.toString();
+    },
     getAcceptHeader: () => {
       const value = request.headers.accept;
       return Array.isArray(value) ? value.join(",") : value ?? "";

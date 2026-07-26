@@ -321,6 +321,21 @@ const server = http.createServer(async (request, response) => {
         const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
 
         try {
+          const settlement = await resourceServer.processSettlement(
+            paymentResult.paymentPayload,
+            paymentResult.paymentRequirements,
+            paymentResult.declaredExtensions,
+            {
+              request: context,
+              responseBody: Buffer.from("{}"),
+              responseHeaders: {}
+            }
+          );
+
+          if (!settlement.success) {
+            throw new HttpError(402, settlement.errorMessage ?? settlement.errorReason ?? "Tool call payment settlement failed");
+          }
+
           let toolResult;
           if (name === "search_domain") {
             const domainName = readRequiredString(args, "domainName");

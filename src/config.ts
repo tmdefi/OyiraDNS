@@ -196,6 +196,7 @@ export function loadConfig(): ServiceConfig {
     x402: {
       enabled: readEnv("X402_ENABLED", "true") === "true",
       network: readEnv("X402_NETWORK", "eip155:196"),
+      // Treasury wallet that collects all x402 payments
       payTo: readEnv("X402_PAY_TO", readEnv("OKX_WALLET_ADDRESS")),
       maxTimeoutSeconds: Number(readEnv("X402_MAX_TIMEOUT_SECONDS", "300")),
       syncSettle: readEnv("X402_SYNC_SETTLE", "false") === "true",

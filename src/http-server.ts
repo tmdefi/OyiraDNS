@@ -308,10 +308,9 @@ const server = http.createServer(async (request, response) => {
       const verifiedPaymentPayer = x402PaymentPayloadPayer(paymentResult.paymentPayload);
 
       if (url.pathname === "/agent/tools/call") {
-        const isJsonRpc = body.jsonrpc === "2.0" || typeof body.method === "string";
-        const params = isJsonRpc ? (body.params as Record<string, unknown> | undefined) : body;
-        const name = params?.name as string | undefined;
-        const args = (params?.arguments as Record<string, unknown>) || {};
+        const payload = (body.params ?? body) as Record<string, unknown>;
+        const name = payload.name;
+        const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
 
         try {
           let toolResult;

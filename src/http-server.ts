@@ -282,6 +282,14 @@ const server = http.createServer(async (request, response) => {
         }
       }
       const body = url.pathname === "/agent/tools/call" ? rawBody : normalizeX402PurchaseInvocation(rawBody);
+
+      if (url.pathname === "/agent/tools/call") {
+        const payload = (body.params ?? body) as Record<string, unknown>;
+        if (typeof payload.name !== "string" || !payload.name) {
+          throw new HttpError(400, "Invalid JSON-RPC payload: missing tool 'name' in parameters.");
+        }
+      }
+
       const context = x402RequestContext(request, url, body);
       const resourceServer = await getX402PurchaseServer();
       const paymentResult = await resourceServer.processHTTPRequest(context);

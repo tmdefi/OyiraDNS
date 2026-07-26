@@ -39,6 +39,23 @@ export function registerTools(
   domainQuotes: DomainQuoteService
 ) {
   server.tool(
+    "purchase_domain",
+    "Register a domain through Oyira after exact x402 payment settlement.",
+    {
+      idempotencyKey: z.string().min(1).describe("A unique key to prevent duplicate purchases"),
+      domainName: z.string().min(3),
+      years: z.number().int().min(1).max(10).default(1),
+      registrationContact: registrationContactSchema,
+      nameservers: z.array(z.string().min(3)).optional()
+    },
+    async (args) => {
+      // Execution is intercepted by http-server.ts during the x402 post-payment block.
+      // This handler is just for the MCP metadata schema definition.
+      return jsonResult({ error: "Execution must occur via the x402 POST /agent/tools/call endpoint." });
+    }
+  );
+
+  server.tool(
     "quote_domain",
     "Create a domain purchase quote before requesting payment.",
     {

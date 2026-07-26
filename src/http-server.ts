@@ -348,6 +348,90 @@ const server = http.createServer(async (request, response) => {
             const paymentSymbol = readOptionalString(args, "paymentSymbol");
             const years = typeof args.years === "number" ? args.years : 1;
             toolResult = await domainQuotes.createQuote({ domainName, currency, paymentSymbol, years });
+          } else if (name === "purchase_domain") {
+            const prepared = await prepareX402Purchase(args);
+            console.log(`[DEBUG] purchase_domain prepared quote totalDue: ${prepared.quote.totalDue}, status: ${prepared.record.status}`);
+            console.log(`[DEBUG] payment requirement amount: ${settlement.requirements.amount}`);
+            
+            if (prepared.record.status === "registered") {
+              toolResult = {
+                action: "x402-domain-purchase",
+                status: "already_registered",
+                domainName: prepared.record.domainName,
+                years: prepared.record.years,
+                quoteId: prepared.record.quoteId,
+                customerId: prepared.record.customerId,
+                x402Payer: prepared.record.x402Payer,
+                ledgerRecordId: prepared.record.ledgerRecordId
+              };
+            } else {
+              if (settlement.requirements.amount !== `$${prepared.quote.totalDue}`) {
+                throw new HttpError(402, `Payment requirement mismatch. Expected $${prepared.quote.totalDue} but settlement requirement was ${settlement.requirements.amount}`);
+              }
+              
+              const settledCustomerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
+
+              await x402Purchases.update(prepared.record.idempotencyKey, {
+                status: "payment_settled",
+                paymentTransaction: settlement.transaction,
+                customerId: settledCustomerId,
+                x402Payer: verifiedPaymentPayer
+              });
+
+              const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
+              const registrationContact = readRequiredRegistrationContact(args);
+              let registration: unknown;
+              let ledgerRecord: Awaited<ReturnType<DomainLedger["createRecord"]>>;
+
+              try {
+                registration = await dynadot.registerDomain({
+                  domainName: quote.domainName,
+                  years: quote.years,
+                  currency: quote.currency,
+                  nameservers: readStringArray(args, "nameservers"),
+                  registrationContact,
+                  paymentConfirmationId: settlement.transaction ?? prepared.record.idempotencyKey
+                });
+                ledgerRecord = await domainLedger.createRecord({
+                  domainName: quote.domainName,
+                  customerId: settledCustomerId,
+                  x402Payer: verifiedPaymentPayer,
+                  years: quote.years,
+                  currency: quote.currency,
+                  paymentId: settlement.transaction ?? prepared.record.idempotencyKey,
+                  registrationContact,
+                  dynadotRegistration: registration,
+                  payment: {
+                    provider: "x402",
+                    network: settlement.requirements.network,
+                    transaction: settlement.transaction,
+                    amount: settlement.requirements.amount,
+                    asset: settlement.requirements.asset
+                  }
+                });
+
+                await x402Purchases.update(prepared.record.idempotencyKey, {
+                  status: "registered",
+                  ledgerRecordId: ledgerRecord.id
+                });
+
+                toolResult = {
+                  action: "x402-domain-purchase",
+                  status: "registered",
+                  ledgerRecordId: ledgerRecord.id,
+                  domainName: quote.domainName,
+                  registration,
+                  warning: "Store your ledgerRecordId as it is your receipt. Dynadot propagation takes up to 24 hours."
+                };
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                await x402Purchases.update(prepared.record.idempotencyKey, {
+                  status: "failed",
+                  error: message
+                });
+                throw new HttpError(500, `Domain registration failed after payment: ${message}`);
+              }
+            }
           } else {
             throw new HttpError(404, `Tool ${name} is not supported or requires the x402 endpoint.`);
           }
@@ -1499,32 +1583,64 @@ async function getX402PurchaseServer() {
         network: x402Network,
         asset: xLayerUsdt0Asset,
         payTo: config.x402.payTo,
-        price: "0.00",
+        price: async (context: HTTPRequestContext) => {
+          const body = asBodyObject(context.adapter.getBody?.());
+          const payload = (body.params ?? body) as Record<string, unknown>;
+          console.log(`[DEBUG] accepts.price payload.name=${payload.name}`);
+          if (payload.name === "purchase_domain") {
+            const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
+            const prepared = await prepareX402Purchase(args);
+            console.log(`[DEBUG] accepts.price returning $${prepared.quote.totalDue}`);
+            return `$${prepared.quote.totalDue}`;
+          }
+          return "0.00";
+        },
         maxTimeoutSeconds: config.x402.maxTimeoutSeconds
       },
       description: "Call Oyira tools via MCP",
       mimeType: "application/json",
-      unpaidResponseBody: async () => ({
-        contentType: "application/json",
-        body: {
-          error: "payment_required",
-          docs: {
-            description: "Call Oyira tools via x402 MCP endpoint.",
-            method: "POST",
-            jsonBody: {
-              jsonrpc: "2.0",
-              id: 1,
-              method: "tools/call",
-              params: {
-                name: "<tool_name>",
-                arguments: { "<key>": "<value>" }
-              }
-            },
-            supportedTools: ["search_domain", "quote_domain"],
-            auth: "x402 payment signature required. No customerId or API key required."
-          }
+      unpaidResponseBody: async (context: HTTPRequestContext) => {
+        const body = asBodyObject(context.adapter.getBody?.());
+        const payload = (body.params ?? body) as Record<string, unknown>;
+        let quoteBlock: any = undefined;
+        
+        if (payload.name === "purchase_domain") {
+          const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
+          const prepared = await prepareX402Purchase(args);
+          quoteBlock = {
+            id: prepared.quote.id,
+            domainName: prepared.quote.domainName,
+            years: prepared.quote.years,
+            totalDue: prepared.quote.totalDue,
+            currency: prepared.quote.currency,
+            paymentSymbol: prepared.quote.paymentSymbol,
+            expiresAt: prepared.quote.expiresAt
+          };
         }
-      })
+
+        return {
+          contentType: "application/json",
+          body: {
+            error: "payment_required",
+            quote: quoteBlock,
+            docs: {
+              description: "Call Oyira tools via x402 MCP endpoint.",
+              method: "POST",
+              jsonBody: {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "tools/call",
+                params: {
+                  name: "<tool_name>",
+                  arguments: { "<key>": "<value>" }
+                }
+              },
+              supportedTools: ["search_domain", "quote_domain", "purchase_domain"],
+              auth: "x402 payment signature required. No customerId or API key required."
+            }
+          }
+        };
+      }
     };
     x402PurchaseRoutes["GET /agent/tools/call"] = x402PurchaseRoutes["POST /agent/tools/call"];
     const httpResourceServer = new x402HTTPResourceServer(resourceServer, x402PurchaseRoutes);

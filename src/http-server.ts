@@ -285,9 +285,7 @@ const server = http.createServer(async (request, response) => {
 
       if (url.pathname === "/agent/tools/call") {
         const payload = (body.params ?? body) as Record<string, unknown>;
-        if (typeof payload.name !== "string" || !payload.name || payload.name === "undefined") {
-          throw new HttpError(400, "Invalid JSON-RPC payload: missing or malformed tool 'name' in parameters.");
-        }
+        // Name validation moved to the execution block below so x402 probes get a 402 instead of 400
       }
 
       // --- Renewal tool authentication and pre-flight ownership check ---
@@ -329,6 +327,10 @@ const server = http.createServer(async (request, response) => {
       if (url.pathname === "/agent/tools/call") {
         const payload = (body.params ?? body) as Record<string, unknown>;
         const name = payload.name;
+        if (typeof name !== "string" || !name || name === "undefined") {
+          throw new HttpError(400, "Invalid JSON-RPC payload: missing or malformed tool 'name' in parameters.");
+        }
+        
         const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
 
         try {

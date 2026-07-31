@@ -62,6 +62,23 @@ Register a domain through Oyira after exact x402 payment settlement.
   - `organization` *(string, optional)*
 - **`nameservers`** *(array of strings, optional)*: Up to 13 nameservers to set upon registration.
 
+### `quote_renewal`
+Create a domain renewal quote (locks in the price) before requesting payment. Requires `Authorization: Bearer <apiKey>`.
+- **`domainName`** *(string, optional)*: The full domain name to quote. If omitted, lists your renewable domains.
+- **`years`** *(integer, optional)*: Renewal years (1-10). Default: `1`.
+- **`currency`** *(string, optional)*: 3-letter fiat currency code.
+- **`paymentSymbol`** *(string, optional)*: Cryptocurrency ticker for the quote (e.g. `USDT0`).
+
+### `renew_domain` (x402 Protected)
+Renew a domain through Oyira after exact x402 payment settlement. Requires `Authorization: Bearer <apiKey>`.
+- **`idempotencyKey`** *(string, required)*: A unique key (e.g. timestamp or UUID) to prevent duplicate renewals.
+- **`domainName`** *(string, required)*: The domain name to renew.
+- **`years`** *(integer, optional)*: Renewal years (1-10). Default: `1`.
+
+### `get_expiring_domains`
+List domains that are expiring within a certain number of days. Requires `Authorization: Bearer <apiKey>`.
+- **`daysThreshold`** *(integer, optional)*: Number of days. Default: `30`.
+
 ### `set_nameservers`
 Set nameservers for a registered domain.
 - **`domainName`** *(string, required)*: The domain to update.

@@ -107,6 +107,28 @@ export class DynadotClient {
     });
   }
 
+  renewDomain(input: {
+    domainName: string;
+    duration: number;
+    priceCheck?: boolean;
+    currency?: string;
+    coupon?: string;
+    noRenewIfLateRenewFeeNeeded?: boolean;
+  }) {
+    if (this.config.env === "live" && !this.config.allowLivePurchases && !input.priceCheck) {
+      throw new Error("Live renewals are disabled. Set ALLOW_LIVE_PURCHASES=true to enable live renewals.");
+    }
+
+    return this.api3Request("renew", {
+      domain: input.domainName.trim().toLowerCase(),
+      duration: input.duration,
+      price_check: input.priceCheck ? 1 : undefined,
+      currency: input.currency,
+      coupon: input.coupon,
+      no_renew_if_late_renew_fee_needed: input.noRenewIfLateRenewFeeNeeded ? 1 : undefined
+    });
+  }
+
   getTldPrice(tld: string, currency?: string) {
     return this.request("GET", `/restful/${this.config.apiVersion}/domains/get_tld_price`, {
       query: {

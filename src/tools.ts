@@ -441,6 +441,52 @@ export function registerTools(
       return jsonResult(await domainMonitor.checkAll());
     }
   );
+
+  server.tool(
+    "quote_renewal",
+    "Create a domain renewal quote. Requires Authorization: Bearer <customerAccess.apiKey>. If domainName is omitted, returns a list of domains owned by the customer for selection.",
+    {
+      domainName: z.string().min(3).optional(),
+      years: z.number().int().min(1).max(10).default(1),
+      currency: z.string().length(3).optional(),
+      paymentSymbol: z.string().min(1).optional(),
+      serviceFeeAmount: z.string().optional()
+    },
+    async (args) => {
+      // Execution and ledger ownership checks are intercepted by http-server.ts.
+      // This handler is just for the MCP metadata schema definition and is otherwise unreachable.
+      return jsonResult({ error: "Execution must occur via the x402 POST /agent/tools/call endpoint to enforce ledger ownership checks." });
+    }
+  );
+
+  server.tool(
+    "renew_domain",
+    "Renew a domain through Oyira after exact x402 payment settlement.",
+    {
+      idempotencyKey: z.string().min(1).describe("A unique key to prevent duplicate renewals"),
+      domainName: z.string().min(3),
+      duration: z.number().int().min(1).max(10).default(1),
+      currency: z.string().length(3).optional(),
+      coupon: z.string().optional(),
+      noRenewIfLateRenewFeeNeeded: z.boolean().optional()
+    },
+    async (args) => {
+      // Execution is intercepted by http-server.ts during the x402 post-payment block.
+      // This handler is just for the MCP metadata schema definition.
+      return jsonResult({ error: "Execution must occur via the x402 POST /agent/tools/call endpoint." });
+    }
+  );
+  server.tool(
+    "get_expiring_domains",
+    "List domains that are expiring within a certain number of days.",
+    {
+      daysThreshold: z.number().int().min(1).default(30),
+      customerId: z.string().min(1).optional()
+    },
+    async (args) => {
+      // Execution and auth checks are intercepted by http-server.ts via the x402 wrapper.
+      // This handler is just for the MCP metadata schema definition.
+      return jsonResult({ error: "Execution must occur via the x402 POST /agent/tools/call endpoint." });
+    }
+  );
 }
-
-

@@ -98,6 +98,30 @@ export class DomainLedger {
     });
   }
 
+  async getExpiringDomains(daysThreshold: number = 30, customerId?: string) {
+    const records = await this.listRecords({ customerId });
+    const now = new Date();
+    const thresholdDate = new Date();
+    thresholdDate.setDate(thresholdDate.getDate() + daysThreshold);
+
+    return records
+      .map((record) => {
+        const expirationDate = new Date(record.createdAt);
+        expirationDate.setFullYear(expirationDate.getFullYear() + record.years);
+        return {
+          ...record,
+          expirationDate: expirationDate.toISOString(),
+          isExpired: expirationDate < now,
+          daysUntilExpiration: Math.ceil((expirationDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+        };
+      })
+      .filter((record) => {
+        const expDate = new Date(record.expirationDate);
+        return expDate > now && expDate <= thresholdDate;
+      })
+      .sort((a, b) => new Date(a.expirationDate).getTime() - new Date(b.expirationDate).getTime());
+  }
+
   async getRecordByDomain(domainName: string, customerId?: string) {
     const records = await this.listRecords({ domainName, customerId });
     return records.at(-1) ?? null;
@@ -139,6 +163,33 @@ export class DomainLedger {
         targetEmail: input.targetEmail,
         dynadotPush: input.dynadotPush,
         requestedAt: now
+      },
+      updatedAt: now
+    };
+
+    store.records[index] = updated;
+    await this.writeStore(store);
+
+    return updated;
+  }
+
+  async extendRecord(recordId: string, additionalYears: number, paymentId: string, renewalResult: unknown) {
+    const store = await this.readStore();
+    const index = store.records.findIndex((r) => r.id === recordId);
+
+    if (index === -1) {
+      throw new Error(`No ledger record found for id ${recordId}.`);
+    }
+
+    const now = new Date().toISOString();
+    const record = store.records[index];
+    const updated: DomainLedgerRecord = {
+      ...record,
+      years: record.years + additionalYears,
+      paymentId: paymentId,
+      dynadotRegistration: {
+        previous: record.dynadotRegistration,
+        renewal: renewalResult
       },
       updatedAt: now
     };

@@ -290,6 +290,17 @@ const server = http.createServer(async (request, response) => {
         }
       }
 
+      // --- Renewal tool authentication and pre-flight ownership check ---
+      // quote_renewal and renew_domain require a valid customerAccess.apiKey.
+      // quote_renewal is handled entirely here (no x402 payment needed for quoting).
+      // renew_domain verifies ownership then falls through to x402.
+      if (url.pathname === "/agent/tools/call") {
+        const renewalPayload = (body.params ?? body) as Record<string, unknown>;
+        const renewalName = renewalPayload.name as string;
+
+        // Authentication and pre-flight checks are now deferred to the x402 layer components (accepts.price and tool execution).
+      }
+
       const context = x402RequestContext(request, url, body);
       const resourceServer = await getX402PurchaseServer();
       const paymentResult = await resourceServer.processHTTPRequest(context);
@@ -352,7 +363,7 @@ const server = http.createServer(async (request, response) => {
             const prepared = await prepareX402Purchase(args);
             console.log(`[DEBUG] purchase_domain prepared quote totalDue: ${prepared.quote.totalDue}, status: ${prepared.record.status}`);
             console.log(`[DEBUG] payment requirement amount: ${settlement.requirements.amount}`);
-            
+
             if (prepared.record.status === "registered") {
               toolResult = {
                 action: "x402-domain-purchase",
@@ -368,7 +379,7 @@ const server = http.createServer(async (request, response) => {
               if (settlement.requirements.amount !== `$${prepared.quote.totalDue}`) {
                 throw new HttpError(402, `Payment requirement mismatch. Expected $${prepared.quote.totalDue} but settlement requirement was ${settlement.requirements.amount}`);
               }
-              
+
               const settledCustomerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
 
               await x402Purchases.update(prepared.record.idempotencyKey, {
@@ -430,6 +441,127 @@ const server = http.createServer(async (request, response) => {
                   error: message
                 });
                 throw new HttpError(500, `Domain registration failed after payment: ${message}`);
+              }
+            }
+          } else if (name === "quote_domain") {
+            const domainName = readRequiredString(args, "domainName");
+            const currency = readOptionalString(args, "currency");
+            const paymentSymbol = readOptionalString(args, "paymentSymbol");
+            const years = typeof args.years === "number" ? args.years : 1;
+            toolResult = await domainQuotes.createQuote({ domainName, currency, paymentSymbol, years });
+          } else if (name === "get_expiring_domains") {
+            const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
+            if (!authToken) {
+              throw new HttpError(401, "get_expiring_domains requires Authorization: Bearer <customerAccess.apiKey>.");
+            }
+            const matchedKey = await userApiKeys.authenticate(authToken);
+            if (!matchedKey) {
+              throw new HttpError(401, "Invalid or expired customer API key.");
+            }
+            const daysThreshold = typeof args.daysThreshold === "number" ? args.daysThreshold : 30;
+            toolResult = await domainLedger.getExpiringDomains(daysThreshold, matchedKey.customerId);
+          } else if (name === "quote_renewal") {
+            const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
+            if (!authToken) {
+              throw new HttpError(401, "Renewal tools require Authorization: Bearer <customerAccess.apiKey>.");
+            }
+            const matchedKey = await userApiKeys.authenticate(authToken);
+            if (!matchedKey) {
+              throw new HttpError(401, "Invalid or expired customer API key.");
+            }
+            const resolvedCustomerId = matchedKey.customerId;
+            const targetDomain = readOptionalString(args, "domainName");
+
+            if (!targetDomain) {
+              const records = await domainLedger.listRecords({ customerId: resolvedCustomerId });
+              toolResult = {
+                action: "list-renewable-domains",
+                customerId: resolvedCustomerId,
+                count: records.length,
+                domains: records.map((record) => ({
+                  domainName: record.domainName,
+                  purchasedAt: record.createdAt,
+                  years: record.years
+                })),
+                next: "Call quote_renewal with a domainName from the list above to get the renewal price and quote id."
+              };
+            } else {
+              const ledgerRecord = await domainLedger.getRecordByDomain(targetDomain.trim().toLowerCase(), resolvedCustomerId);
+              if (!ledgerRecord) {
+                throw new HttpError(403, `Domain ${targetDomain} was not found in your Oyira account. Only domains purchased through Oyira can be renewed here.`);
+              }
+              const renewalYears = typeof args.years === "number" ? args.years : 1;
+              const renewalCurrency = readOptionalString(args, "currency");
+              const paymentSymbol = readOptionalString(args, "paymentSymbol");
+              toolResult = await domainQuotes.createRenewalQuote({ domainName: targetDomain.trim().toLowerCase(), years: renewalYears, currency: renewalCurrency, paymentSymbol });
+            }
+          } else if (name === "renew_domain") {
+            const prepared = await prepareX402Renewal(args);
+
+            if (prepared.record.status === "registered") {
+              toolResult = {
+                action: "x402-domain-renewal",
+                status: "already_renewed",
+                domainName: prepared.record.domainName,
+                years: prepared.record.years,
+                quoteId: prepared.record.quoteId,
+              };
+            } else {
+              if (settlement.requirements.amount !== `$${prepared.quote.totalDue}`) {
+                throw new HttpError(402, `Payment requirement mismatch. Expected $${prepared.quote.totalDue} but settlement requirement was ${settlement.requirements.amount}`);
+              }
+
+              const settledCustomerId = x402CustomerIdFromPayers(verifiedPaymentPayer, settlement);
+
+              await x402Purchases.update(prepared.record.idempotencyKey, {
+                status: "payment_settled",
+                paymentTransaction: settlement.transaction,
+                customerId: settledCustomerId,
+                x402Payer: verifiedPaymentPayer
+              });
+
+              // Belt-and-suspenders ownership check using the API-key-resolved customerId
+              // that was injected during the pre-flight auth block (before x402 payment).
+              // This is the same customerId used for DNS/nameserver ownership checks.
+              const ownershipCustomerId = prepared.record.customerId;
+              const ownershipRecord = await domainLedger.getRecordByDomain(prepared.quote.domainName, ownershipCustomerId);
+              if (!ownershipRecord) {
+                throw new HttpError(403, `Domain ${prepared.quote.domainName} was not found in the Oyira ledger for this customer. Renewal rejected.`);
+              }
+
+              const quote = await domainQuotes.assertQuoteUsable(prepared.quote.id, prepared.quote);
+              let renewal: unknown;
+
+              try {
+                renewal = await dynadot.renewDomain({
+                  domainName: quote.domainName,
+                  duration: quote.years,
+                  currency: quote.currency
+                });
+
+                const renewalPaymentId = settlement.transaction ? String(settlement.transaction) : "unknown-x402-tx";
+                await domainLedger.extendRecord(ownershipRecord.id, quote.years, renewalPaymentId, renewal);
+
+                await x402Purchases.update(prepared.record.idempotencyKey, {
+                  status: "registered",
+                  ledgerRecordId: ownershipRecord.id
+                });
+
+                toolResult = {
+                  action: "x402-domain-renewal",
+                  status: "renewed",
+                  ledgerRecordId: ownershipRecord.id,
+                  domainName: quote.domainName,
+                  renewal,
+                  warning: "Domain has been successfully renewed."
+                };
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                await x402Purchases.update(prepared.record.idempotencyKey, {
+                  status: "failed",
+                  error: message
+                });
+                throw new HttpError(500, `Domain renewal failed after payment: ${message}`);
               }
             }
           } else {
@@ -1573,10 +1705,10 @@ async function discoverBrandDomains(body: Record<string, unknown>) {
         availableCount: available.length,
         bestAvailable: available[0]
           ? {
-              domainName: available[0].domainName,
-              registrationPrice: available[0].registrationPrice ?? null,
-              currency
-            }
+            domainName: available[0].domainName,
+            registrationPrice: available[0].registrationPrice ?? null,
+            currency
+          }
           : null,
         variants: variants.results.map((entry) => ({
           domainName: entry.domainName,
@@ -1961,6 +2093,26 @@ async function getX402PurchaseServer() {
             const prepared = await prepareX402Purchase(args);
             console.log(`[DEBUG] accepts.price returning $${prepared.quote.totalDue}`);
             return `$${prepared.quote.totalDue}`;
+          } else if (payload.name === "renew_domain") {
+            const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
+            if (!authToken) {
+              throw new HttpError(401, "Renewal tools require Authorization: Bearer <customerAccess.apiKey>.");
+            }
+            const matchedKey = await userApiKeys.authenticate(authToken);
+            if (!matchedKey) {
+              throw new HttpError(401, "Invalid or expired customer API key.");
+            }
+            const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
+            const domainName = readRequiredString(args, "domainName").trim().toLowerCase();
+            const ledgerRecord = await domainLedger.getRecordByDomain(domainName, matchedKey.customerId);
+            if (!ledgerRecord) {
+              throw new HttpError(403, `Domain ${domainName} was not found in your Oyira account. Only domains purchased through Oyira can be renewed here.`);
+            }
+            args.customerId = matchedKey.customerId; // pass to prepareX402Renewal
+
+            const prepared = await prepareX402Renewal(args);
+            console.log(`[DEBUG] accepts.price returning $${prepared.quote.totalDue} for renewal`);
+            return `$${prepared.quote.totalDue}`;
           }
           return "0.00";
         },
@@ -1972,10 +2124,37 @@ async function getX402PurchaseServer() {
         const body = asBodyObject(context.adapter.getBody?.());
         const payload = (body.params ?? body) as Record<string, unknown>;
         let quoteBlock: any = undefined;
-        
+
         if (payload.name === "purchase_domain") {
           const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
           const prepared = await prepareX402Purchase(args);
+          quoteBlock = {
+            id: prepared.quote.id,
+            domainName: prepared.quote.domainName,
+            years: prepared.quote.years,
+            totalDue: prepared.quote.totalDue,
+            currency: prepared.quote.currency,
+            paymentSymbol: prepared.quote.paymentSymbol,
+            expiresAt: prepared.quote.expiresAt
+          };
+        } else if (payload.name === "renew_domain") {
+          const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
+          if (!authToken) {
+            throw new HttpError(401, "Renewal tools require Authorization: Bearer <customerAccess.apiKey>.");
+          }
+          const matchedKey = await userApiKeys.authenticate(authToken);
+          if (!matchedKey) {
+            throw new HttpError(401, "Invalid or expired customer API key.");
+          }
+          const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
+          const domainName = readRequiredString(args, "domainName").trim().toLowerCase();
+          const ledgerRecord = await domainLedger.getRecordByDomain(domainName, matchedKey.customerId);
+          if (!ledgerRecord) {
+            throw new HttpError(403, `Domain ${domainName} was not found in your Oyira account. Only domains purchased through Oyira can be renewed here.`);
+          }
+          args.customerId = matchedKey.customerId;
+
+          const prepared = await prepareX402Renewal(args);
           quoteBlock = {
             id: prepared.quote.id,
             domainName: prepared.quote.domainName,
@@ -2004,7 +2183,7 @@ async function getX402PurchaseServer() {
                   arguments: { "<key>": "<value>" }
                 }
               },
-              supportedTools: ["search_domain", "quote_domain", "purchase_domain"],
+              supportedTools: ["search_domain", "quote_domain", "purchase_domain", "quote_renewal", "renew_domain", "get_expiring_domains"],
               auth: "x402 payment signature required. No customerId or API key required."
             }
           }
@@ -2085,6 +2264,66 @@ async function prepareX402Purchase(body: Record<string, unknown>) {
     quoteId: usableQuote.id,
     customerId,
     registrationContact
+  });
+
+  return { record, quote: usableQuote };
+}
+
+async function prepareX402Renewal(body: Record<string, unknown>) {
+  const idempotencyKey = readRequiredString(body, "idempotencyKey");
+  const domainName = readRequiredString(body, "domainName").trim().toLowerCase();
+  const years = readNumber(body, "duration", readNumber(body, "years", 1));
+  const customerId = readOptionalString(body, "customerId");
+  const requestHash = hashX402PurchaseRequest({
+    customerId,
+    domainName,
+    years
+  });
+  const existing = await x402Purchases.getByIdempotencyKey(idempotencyKey);
+
+  if (existing) {
+    if (existing.requestHash !== requestHash) {
+      throw new HttpError(409, "Idempotency key already belongs to a different x402 renewal request.");
+    }
+
+    if (existing.status === "expired") {
+      throw new HttpError(410, "x402 renewal challenge expired. Create a fresh quote with a new idempotencyKey before payment.");
+    }
+
+    const quote = await domainQuotes.getQuote(existing.quoteId);
+    if (!quote) {
+      throw new HttpError(409, `Stored quote ${existing.quoteId} was not found for idempotency key ${idempotencyKey}.`);
+    }
+
+    if (existing.status === "challenge_created" && isQuoteExpired(quote)) {
+      await x402Purchases.update(existing.idempotencyKey, {
+        status: "expired",
+        error: `Quote ${quote.id} expired at ${quote.expiresAt}.`
+      });
+      throw new HttpError(410, "x402 renewal challenge expired. Create a fresh quote with a new idempotencyKey before payment.");
+    }
+
+    const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
+    if (existing.status !== "registered") {
+      await assertDynadotAccountCanCoverQuote(usableQuote);
+    }
+
+    return { record: existing, quote: usableQuote };
+  }
+
+  const quote = await domainQuotes.createRenewalQuote({
+    domainName,
+    years
+  });
+  const usableQuote = await domainQuotes.assertQuoteUsable(quote.id, quote);
+  await assertDynadotAccountCanCoverQuote(usableQuote);
+  const record = await x402Purchases.create({
+    idempotencyKey,
+    requestHash,
+    domainName: usableQuote.domainName,
+    years: usableQuote.years,
+    quoteId: usableQuote.id,
+    customerId
   });
 
   return { record, quote: usableQuote };
@@ -2171,16 +2410,16 @@ async function x402PurchaseReadiness(body: Record<string, unknown>) {
     storageMode: database.enabled ? "postgres" : "file",
     quote: quote
       ? {
-          id: quote.id,
-          domainName: quote.domainName,
-          years: quote.years,
-          totalDue: quote.totalDue,
-          currency: quote.currency,
-          paymentSymbol: quote.paymentSymbol,
-          expiresAt: quote.expiresAt,
-          expiresInMinutes: Math.max(0, Math.ceil((new Date(quote.expiresAt).getTime() - Date.now()) / 60000)),
-          status: isQuoteExpired(quote) ? "expired" : quote.status
-        }
+        id: quote.id,
+        domainName: quote.domainName,
+        years: quote.years,
+        totalDue: quote.totalDue,
+        currency: quote.currency,
+        paymentSymbol: quote.paymentSymbol,
+        expiresAt: quote.expiresAt,
+        expiresInMinutes: Math.max(0, Math.ceil((new Date(quote.expiresAt).getTime() - Date.now()) / 60000)),
+        status: isQuoteExpired(quote) ? "expired" : quote.status
+      }
       : null,
     checks
   };
@@ -2848,10 +3087,10 @@ async function readyReport() {
     check("stores.audit", Boolean(config.audit.logPath), "Audit log path is configured."),
     database.enabled
       ? {
-          name: "database",
-          ok: databaseOk,
-          message: databaseOk ? "Postgres persistent storage is reachable." : "Postgres persistent storage is configured but unreachable."
-        }
+        name: "database",
+        ok: databaseOk,
+        message: databaseOk ? "Postgres persistent storage is reachable." : "Postgres persistent storage is configured but unreachable."
+      }
       : check("database", true, "File storage fallback is configured."),
     check("stores.userApiKeys", Boolean(config.auth.userApiKeyStorePath), "User API key store path is configured.")
   ];

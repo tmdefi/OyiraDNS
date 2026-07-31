@@ -18,7 +18,7 @@ export interface DomainQuote {
   totalDue: string;
   expiresAt: string;
   status: "quoted" | "payment_created" | "expired";
-  pricingSource: "dynadot_search";
+  pricingSource: "dynadot_search" | "dynadot_renewal";
   pricingWarning?: string;
   availability: unknown;
   tldPrice: unknown;
@@ -114,6 +114,74 @@ export class DomainQuoteService {
       pricingWarning,
       availability,
       tldPrice,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+
+    const store = await this.readStore();
+    store.quotes.push(quote);
+    await this.writeStore(store);
+
+    return quote;
+  }
+
+  async createRenewalQuote(input: {
+    domainName: string;
+    years?: number;
+    currency?: string;
+    paymentSymbol?: string;
+    serviceFeeAmount?: string;
+  }) {
+    const domainName = this.normalizeDomain(input.domainName);
+    const years = input.years ?? 1;
+    const currency = input.currency ?? this.config.defaultCurrency;
+    const paymentSymbol = input.paymentSymbol ?? this.config.paymentSymbol;
+    const serviceFee = this.formatAmount(input.serviceFeeAmount ?? (this.config.serviceFeeAmount || "0"));
+    
+    let renewPriceInfo: unknown;
+    try {
+      renewPriceInfo = await this.dynadot.renewDomain({
+        domainName,
+        duration: years,
+        currency,
+        priceCheck: true
+      });
+    } catch (error) {
+      throw new Error(`Failed to get renewal price for ${domainName}. Ensure the domain is registered in the server's Dynadot account. Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (!renewPriceInfo || typeof renewPriceInfo !== "object") {
+      throw new Error(`Could not determine Dynadot renewal price from response: ${JSON.stringify(renewPriceInfo)}`);
+    }
+    
+    const responseEntry = Object.values(renewPriceInfo).find(
+      (entry) => entry && typeof entry === "object" && !Array.isArray(entry)
+    ) as Record<string, unknown> | undefined;
+
+    const dynadotCostRaw = responseEntry?.Price ?? responseEntry?.Amount ?? responseEntry?.price ?? responseEntry?.amount;
+    
+    if (dynadotCostRaw == null) {
+       throw new Error(`Could not determine Dynadot renewal price from response: ${JSON.stringify(renewPriceInfo)}`);
+    }
+
+    const dynadotCost = this.formatAmount(String(dynadotCostRaw));
+    const now = new Date();
+    
+    const quote: DomainQuote = {
+      id: `quote_${crypto.randomUUID()}`,
+      domainName,
+      years,
+      currency,
+      paymentSymbol,
+      available: false,
+      dynadotCost,
+      serviceFee,
+      totalDue: this.formatAmount(this.addAmounts(dynadotCost, serviceFee)),
+      expiresAt: new Date(now.getTime() + this.config.ttlSeconds * 1000).toISOString(),
+      status: "quoted",
+      pricingSource: "dynadot_renewal",
+      availability: renewPriceInfo,
+      tldPrice: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     };

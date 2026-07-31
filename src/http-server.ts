@@ -283,10 +283,7 @@ const server = http.createServer(async (request, response) => {
       }
       const body = url.pathname === "/agent/tools/call" ? rawBody : normalizeX402PurchaseInvocation(rawBody);
 
-      if (url.pathname === "/agent/tools/call") {
-        const payload = (body.params ?? body) as Record<string, unknown>;
-        // Name validation moved to the execution block below so x402 probes get a 402 instead of 400
-      }
+
 
       // --- Renewal tool authentication and pre-flight ownership check ---
       // quote_renewal and renew_domain require a valid customerAccess.apiKey.
@@ -326,7 +323,7 @@ const server = http.createServer(async (request, response) => {
 
       if (url.pathname === "/agent/tools/call") {
         const payload = (body.params ?? body) as Record<string, unknown>;
-        const name = payload.name;
+        const name = payload.name ?? payload.toolName;
         if (typeof name !== "string" || !name || name === "undefined") {
           throw new HttpError(400, "Invalid JSON-RPC payload: missing or malformed tool 'name' in parameters.");
         }
@@ -2089,13 +2086,14 @@ async function getX402PurchaseServer() {
         price: async (context: HTTPRequestContext) => {
           const body = asBodyObject(context.adapter.getBody?.());
           const payload = (body.params ?? body) as Record<string, unknown>;
-          console.log(`[DEBUG] accepts.price payload.name=${payload.name}`);
-          if (payload.name === "purchase_domain") {
+          const name = payload.name ?? payload.toolName;
+          console.log(`[DEBUG] accepts.price payload.name=${name}`);
+          if (name === "purchase_domain") {
             const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
             const prepared = await prepareX402Purchase(args);
             console.log(`[DEBUG] accepts.price returning $${prepared.quote.totalDue}`);
             return `$${prepared.quote.totalDue}`;
-          } else if (payload.name === "renew_domain") {
+          } else if (name === "renew_domain") {
             const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
             if (!authToken) {
               throw new HttpError(401, "Renewal tools require Authorization: Bearer <customerAccess.apiKey>.");
@@ -2125,9 +2123,10 @@ async function getX402PurchaseServer() {
       unpaidResponseBody: async (context: HTTPRequestContext) => {
         const body = asBodyObject(context.adapter.getBody?.());
         const payload = (body.params ?? body) as Record<string, unknown>;
+        const name = payload.name ?? payload.toolName;
         let quoteBlock: any = undefined;
 
-        if (payload.name === "purchase_domain") {
+        if (name === "purchase_domain") {
           const args = (payload.arguments ?? payload.parameters ?? payload.input ?? {}) as Record<string, unknown>;
           const prepared = await prepareX402Purchase(args);
           quoteBlock = {
@@ -2139,7 +2138,7 @@ async function getX402PurchaseServer() {
             paymentSymbol: prepared.quote.paymentSymbol,
             expiresAt: prepared.quote.expiresAt
           };
-        } else if (payload.name === "renew_domain") {
+        } else if (name === "renew_domain") {
           const authToken = context.adapter.getHeader("authorization")?.replace(/^Bearer\s+/i, "");
           if (!authToken) {
             throw new HttpError(401, "Renewal tools require Authorization: Bearer <customerAccess.apiKey>.");

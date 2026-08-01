@@ -1130,11 +1130,14 @@ function manifest() {
       x402PurchaseReadiness: "/agent/x402/purchase-readiness",
       brandDiscovery: "/agent/brand-discovery",
       message: "/agent/message",
+      toolsCall: "/agent/tools/call",
       x402Purchase: "/x402/domain/purchase",
       actions: {
         createPayment: "/agent/actions/create-payment",
         verifyPayment: "/agent/actions/verify-payment",
         purchaseDomain: "/agent/actions/purchase-domain",
+        quoteRenewal: "/agent/tools/call",
+        renewDomain: "/agent/tools/call",
         pushDomain: "/agent/actions/push-domain",
         configureDns: "/agent/actions/configure-dns",
         setNameservers: "/agent/actions/set-nameservers",
@@ -1148,9 +1151,11 @@ function manifest() {
       "monitor_domain_for_customer",
       "get_domain_quote",
       "list_domain_quotes",
-      "get_domain_ledger_record"
+      "get_domain_ledger_record",
+      "get_expiring_domains",
+      "quote_renewal"
     ],
-    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "push_domain", "set_nameservers", "configure_dns", "link_project"],
+    gatedTools: ["create_payment_from_quote", "verify_payment", "purchase_domain", "renew_domain", "push_domain", "set_nameservers", "configure_dns", "link_project"],
     serviceNotices: [
       {
         topic: "nameserver_changes",
@@ -1534,6 +1539,133 @@ function manifest() {
             note: "The first request returns an x402 payment challenge. Resubmit the same body with the required PAYMENT-SIGNATURE after payment settlement."
           }
         ]
+      },
+      {
+        name: "quote_renewal",
+        title: "Quote domain renewal",
+        description: "Create a renewal quote for a domain owned by the authenticated customer. If domainName is omitted, lists renewable customer domains.",
+        method: "POST",
+        endpoint: "/agent/tools/call",
+        invocationEndpoints: ["/agent/tools/call"],
+        auth: "Authorization: Bearer <customerAccess.apiKey>",
+        inputSchema: {
+          type: "object",
+          properties: {
+            domainName: { type: "string", description: "Owned domain to quote for renewal. Omit to list renewable domains." },
+            years: { type: "integer", minimum: 1, maximum: 10, default: 1, description: "Renewal term in years." },
+            currency: { type: "string", minLength: 3, maxLength: 3, description: "Fiat currency code for pricing." },
+            paymentSymbol: { type: "string", description: "Payment token symbol for the quote, such as USDT0." }
+          }
+        },
+        callExample: {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "quote_renewal",
+            arguments: {
+              domainName: "bondibark.xyz",
+              years: 1
+            }
+          }
+        }
+      },
+      {
+        name: "renew_domain",
+        title: "Renew domain with x402",
+        description: "Renew an existing Oyira-purchased domain after exact x402 payment settlement.",
+        method: "POST",
+        endpoint: "/agent/tools/call",
+        invocationEndpoints: ["/agent/tools/call"],
+        protocol: "x402",
+        auth: "Authorization: Bearer <customerAccess.apiKey>",
+        payment: {
+          challengeStatus: 402,
+          challengeHeader: "PAYMENT-REQUIRED",
+          signatureHeader: "PAYMENT-SIGNATURE",
+          network: config.x402.network,
+          asset: {
+            symbol: "USDT0",
+            address: xLayerUsdt0Asset,
+            chainId: 196
+          }
+        },
+        inputSchema: {
+          type: "object",
+          required: ["idempotencyKey", "domainName"],
+          properties: {
+            idempotencyKey: { type: "string", description: "Unique key to prevent duplicate renewals." },
+            domainName: { type: "string", description: "Owned domain to renew." },
+            years: { type: "integer", minimum: 1, maximum: 10, default: 1, description: "Renewal term in years." },
+            duration: { type: "integer", minimum: 1, maximum: 10, description: "Alias for years." },
+            currency: { type: "string", minLength: 3, maxLength: 3, description: "Fiat currency code for pricing." },
+            coupon: { type: "string", description: "Optional Dynadot renewal coupon." },
+            noRenewIfLateRenewFeeNeeded: { type: "boolean", description: "Abort if Dynadot requires a late-renewal fee." }
+          }
+        },
+        callExample: {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "renew_domain",
+            arguments: {
+              idempotencyKey: "renew-example-001",
+              domainName: "bondibark.xyz",
+              years: 1
+            }
+          }
+        }
+      },
+      {
+        name: "monitor_domain_for_customer",
+        title: "Monitor domain availability",
+        description: "Add or update a customer-requested availability monitor for a domain.",
+        method: "POST",
+        endpoint: "/agent/tools/call",
+        invocationEndpoints: ["/agent/tools/call"],
+        inputSchema: {
+          type: "object",
+          required: ["domainName"],
+          properties: {
+            domainName: { type: "string", description: "Domain to monitor." },
+            customerId: { type: "string", description: "Optional customer identifier for scoped monitors." },
+            alertWhenAvailable: { type: "boolean", default: true, description: "Notify when the monitor detects availability." }
+          }
+        },
+        outputSchema: {
+          type: "object",
+          properties: {
+            monitor: {
+              type: "object",
+              properties: {
+                domainName: { type: "string" },
+                customerId: { type: "string" },
+                alertWhenAvailable: { type: "boolean" },
+                lastAvailability: { type: ["string", "null"], enum: ["Yes", "No", "Unknown", null] },
+                lastCheckedAt: { type: ["string", "null"] },
+                createdAt: { type: "string" },
+                updatedAt: { type: "string" }
+              }
+            },
+            nextAction: { type: "string" }
+          }
+        }
+      },
+      {
+        name: "get_expiring_domains",
+        title: "Get expiring domains",
+        description: "List authenticated customer domains expiring within the requested number of days.",
+        method: "POST",
+        endpoint: "/agent/tools/call",
+        invocationEndpoints: ["/agent/tools/call"],
+        auth: "Authorization: Bearer <customerAccess.apiKey>",
+        inputSchema: {
+          type: "object",
+          properties: {
+            daysThreshold: { type: "integer", minimum: 1, default: 30, description: "Number of days to look ahead." }
+          }
+        }
       }
     ],
     usageExamples: [
@@ -3053,6 +3185,12 @@ function auditResult(result: Record<string, unknown>) {
 }
 
 function publicLedgerRecord(record: Awaited<ReturnType<DomainLedger["listRecords"]>>[number]) {
+  const expirationDate = new Date(record.createdAt);
+  expirationDate.setFullYear(expirationDate.getFullYear() + record.years);
+  const expirationTime = expirationDate.getTime();
+  const now = Date.now();
+  const hasValidExpiration = Number.isFinite(expirationTime);
+
   return compactRecord({
     id: record.id,
     domainName: record.domainName,
@@ -3065,6 +3203,9 @@ function publicLedgerRecord(record: Awaited<ReturnType<DomainLedger["listRecords
     hasDomainPush: Boolean(record.domainPush),
     pushedToAccount: record.domainPush?.targetAccount,
     pushedToEmail: record.domainPush?.targetEmail,
+    expirationDate: hasValidExpiration ? expirationDate.toISOString() : undefined,
+    isExpired: hasValidExpiration ? expirationTime < now : undefined,
+    daysUntilExpiration: hasValidExpiration ? Math.ceil((expirationTime - now) / (1000 * 60 * 60 * 24)) : undefined,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   });

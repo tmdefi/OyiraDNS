@@ -281,7 +281,7 @@ const server = http.createServer(async (request, response) => {
           }
         }
       }
-      const body = url.pathname === "/agent/tools/call" ? rawBody : normalizeX402PurchaseInvocation(rawBody);
+      const body = normalizeInvocation(rawBody);
 
 
 
@@ -2478,22 +2478,52 @@ function parseLoosePositiveAmount(value: unknown) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function normalizeX402PurchaseInvocation(body: Record<string, unknown>) {
-  if (readOptionalString(body, "domainName")) {
-    return body;
-  }
+function normalizeInvocation(body: Record<string, unknown>) {
+  let target = body;
 
-  for (const key of ["arguments", "input", "params", "parameters", "request", "payload"]) {
-    const nested = objectValue(body[key]);
-    if (nested && readOptionalString(nested, "domainName")) {
-      return {
-        ...nested,
-        idempotencyKey: readOptionalString(nested, "idempotencyKey") ?? readOptionalString(body, "idempotencyKey")
-      };
+  const hasTargetData = (obj: Record<string, unknown>) => {
+    return Boolean(
+      typeof obj.domainName === "string" ||
+      typeof obj.name === "string" ||
+      typeof obj.toolName === "string" ||
+      typeof objectValue(obj.params).name === "string" ||
+      typeof objectValue(obj.params).toolName === "string"
+    );
+  };
+
+  if (!hasTargetData(target)) {
+    for (const key of ["arguments", "input", "params", "parameters", "request", "payload"]) {
+      const nested = objectValue(body[key]);
+      if (nested && hasTargetData(nested)) {
+        target = {
+          ...nested,
+          idempotencyKey: readOptionalString(nested, "idempotencyKey") ?? readOptionalString(body, "idempotencyKey")
+        };
+        break;
+      }
     }
   }
 
-  return body;
+  const params = objectValue(target.params);
+  let toolName = typeof params.name === "string" ? params.name : (typeof params.toolName === "string" ? params.toolName : undefined);
+  let toolArgs = params.arguments ?? params.parameters ?? params.input;
+
+  if (!toolName) {
+    toolName = typeof target.name === "string" ? target.name : (typeof target.toolName === "string" ? target.toolName : undefined);
+    toolArgs = target.arguments ?? target.parameters ?? target.input;
+  }
+
+  if (toolName) {
+    target = {
+      ...target,
+      params: {
+        name: toolName,
+        arguments: toolArgs ?? {}
+      }
+    };
+  }
+
+  return target;
 }
 function x402RequestContext(
   request: http.IncomingMessage,

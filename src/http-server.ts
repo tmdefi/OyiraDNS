@@ -2613,19 +2613,31 @@ function parseLoosePositiveAmount(value: unknown) {
 function normalizeInvocation(body: Record<string, unknown>) {
   let target = body;
 
+  const extractNested = (val: unknown) => {
+    let parsed = val;
+    if (typeof parsed === "string" && parsed.trim().startsWith("{")) {
+      try { parsed = JSON.parse(parsed); } catch {}
+    }
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      parsed = parsed[0];
+    }
+    return objectValue(parsed);
+  };
+
   const hasTargetData = (obj: Record<string, unknown>) => {
+    const p = extractNested(obj.params);
     return Boolean(
       typeof obj.domainName === "string" ||
       typeof obj.name === "string" ||
       typeof obj.toolName === "string" ||
-      typeof objectValue(obj.params).name === "string" ||
-      typeof objectValue(obj.params).toolName === "string"
+      typeof p.name === "string" ||
+      typeof p.toolName === "string"
     );
   };
 
   if (!hasTargetData(target)) {
-    for (const key of ["arguments", "input", "params", "parameters", "request", "payload"]) {
-      const nested = objectValue(body[key]);
+    for (const key of ["arguments", "input", "params", "parameters", "request", "payload", "data"]) {
+      const nested = extractNested(body[key]);
       if (nested && hasTargetData(nested)) {
         target = {
           ...nested,
@@ -2636,7 +2648,7 @@ function normalizeInvocation(body: Record<string, unknown>) {
     }
   }
 
-  const params = objectValue(target.params);
+  const params = extractNested(target.params);
   let toolName = typeof params.name === "string" ? params.name : (typeof params.toolName === "string" ? params.toolName : undefined);
   let toolArgs = params.arguments ?? params.parameters ?? params.input;
 
@@ -2650,7 +2662,7 @@ function normalizeInvocation(body: Record<string, unknown>) {
       ...target,
       params: {
         name: toolName,
-        arguments: toolArgs ?? {}
+        arguments: extractNested(toolArgs) ?? {}
       }
     };
   }
@@ -3312,8 +3324,4 @@ class HttpError extends Error {
     super(message);
   }
 }
-
-
-
-
 

@@ -1,6 +1,16 @@
 import { Pool, type QueryResultRow } from "pg";
 import type { DatabaseConfig } from "./config.js";
 
+const OYIRA_PUBLIC_TABLES = [
+  "oyira_quotes",
+  "oyira_x402_purchases",
+  "oyira_domain_ledger",
+  "oyira_audit_log",
+  "oyira_user_api_keys",
+  "oyira_sessions",
+  "oyira_domain_monitors"
+] as const;
+
 export class Database {
   private readonly pool: Pool | null;
   private schemaReady: Promise<void> | null = null;
@@ -170,6 +180,37 @@ export class Database {
 
       create index if not exists oyira_domain_monitors_domain_name_idx on oyira_domain_monitors (domain_name);
       create index if not exists oyira_domain_monitors_customer_id_idx on oyira_domain_monitors (customer_id);
+    `);
+
+    await this.hardenPublicTables();
+  }
+
+  private async hardenPublicTables() {
+    if (!this.pool) {
+      return;
+    }
+
+    const tableList = OYIRA_PUBLIC_TABLES.map((table) => `public.${table}`).join(", ");
+    const enableRlsStatements = OYIRA_PUBLIC_TABLES.map(
+      (table) => `alter table if exists public.${table} enable row level security;`
+    ).join("\n");
+
+    await this.pool.query(`
+      ${enableRlsStatements}
+
+      revoke all privileges on table ${tableList} from public;
+
+      do $$
+      begin
+        if exists (select 1 from pg_roles where rolname = 'anon') then
+          revoke all privileges on table ${tableList} from anon;
+        end if;
+
+        if exists (select 1 from pg_roles where rolname = 'authenticated') then
+          revoke all privileges on table ${tableList} from authenticated;
+        end if;
+      end
+      $$;
     `);
   }
 }
